@@ -16,6 +16,7 @@ import time
 import os
 import gc
 from six.moves import cPickle as pickle
+from tensorflow.python import debug as tf_debug
 
 url = 'http://mattmahoney.net/dc/'
 
@@ -187,12 +188,14 @@ class MODEL(object):
               num_stairs,
               decay,
               stop_percent,
+              save_steps=None,                # steps at which model is saved into save_path + str(save_steps[i])
+              save_path=None,                 # mask of paths which are used for saving model 
               optional_feed_dict=None,
               half_life_fixed=False,
               fixed_num_steps=False):
         if not half_life_fixed and (self._last_num_steps > min_num_steps):
             min_num_steps = self._last_num_steps
-        half_life = min_num_steps / num_stairs
+        half_life = min_num_steps // num_stairs
             
             
         if self._train_batches is None:
@@ -204,13 +207,13 @@ class MODEL(object):
             
         losses = [0.]
 
-        tf.initialize_all_variables().run()
+        session.run(tf.global_variables_initializer())
         start_time = time.clock()
         mean_loss = 0.
         step = 0
         if not fixed_num_steps:
             stop_condition = ((step - 1) % block_of_steps == 0 and
-                                (losses[len(losses) / 2] - losses[-1]) < losses[len(losses) / 2] * stop_percent / 100 and
+                                (losses[len(losses) // 2] - losses[-1]) < losses[len(losses) // 2] * stop_percent / 100 and
                                 step >= min_num_steps)
         else:
             stop_condition = (step >= min_num_steps)
@@ -235,9 +238,22 @@ class MODEL(object):
                 losses.append(mean_loss)
                 mean_loss = 0
             step += 1
+            if save_steps is not None:
+                if step in save_steps:
+                    current_save_path = save_path + str(step)
+                    folder_list = current_save_path.split('/')[:-1]
+                    if len(folder_list) > 0:
+                        current_folder = folder_list[0]
+                        for idx, folder in enumerate(folder_list):
+                            if idx > 0:
+                                current_folder += ('/' + folder)
+                            if not os.path.exists(current_folder):
+                                os.mkdir(current_folder)
+                    self.saver.save(session, current_save_path)
+
             if not fixed_num_steps:
                 stop_condition = ((step - 1) % block_of_steps == 0 and
-                                    (losses[len(losses) / 2] - losses[-1]) < losses[len(losses) / 2] * stop_percent / 100 and
+                                    (losses[len(losses) // 2] - losses[-1]) < losses[len(losses) // 2] * stop_percent / 100 and
                                     step >= min_num_steps)
             else:
                 stop_condition = (step >= min_num_steps)
@@ -278,7 +294,7 @@ class MODEL(object):
         
         average_percentage_of_correct = 0.
         for _ in range(num_averaging_iterations):
-            for _ in range(self.SKIP_LENGTH / self._num_unrollings):
+            for _ in range(self.SKIP_LENGTH // self._num_unrollings):
                 batches = self._train_batches.next()
                 feed_dict = dict()
                 for i in range(self._num_unrollings + 1):
@@ -319,24 +335,40 @@ class MODEL(object):
         
         return data_for_plot
         
+    def save_graph(self, session, save_path):
+        folder_list = save_path.split('/')[:-1]
+        if len(folder_list) > 0:
+            current_folder = folder_list[0]
+            for idx, folder in enumerate(folder_list):
+                if idx > 0:
+                    current_folder += ('/' + folder)
+                if not os.path.exists(current_folder):
+                    os.mkdir(current_folder)
+        self.saver.save(session, save_path)
+
+
     def simple_run(self,
-                   num_averaging_iterations,
+                   num_averaging_iterations,    # number of percents values used for final averaging
                    save_path,
-                   min_num_steps,
-                   loss_frequency,
+                   min_num_steps,         # minimum number of learning iterations
+                   loss_frequency,          # period of checking loss function. It is used defining if learning should be stopped
                    block_of_steps,        #learning has a chance to be stopped after every block of steps
-                   num_stairs,
-                   decay,
-                   stop_percent,
+                   num_stairs,             # number of times 'learning_rate' is multiplied on 'decay'
+                   decay,                  # a factor by which the learning rate decreases each 'half_life'
+                   stop_percent,              # if fixed_num_steps=False this parameter defines when the learning process should be stopped. If during half the total learning time loss function decreased less than by 'stop_percent' percents the learning would be stopped
+                   save_steps=None,            # steps at which model is saved into save_path + str(save_steps[i])
                    optional_feed_dict=None,
                    half_life_fixed=False,
                    fixed_num_steps=False):
-        config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=True)
+        config = tf.ConfigProto(allow_soft_placement=False, log_device_placement=False)
         
         if not half_life_fixed and (self._last_num_steps > min_num_steps):
             min_num_steps = self._last_num_steps
-        half_life = min_num_steps / num_stairs 
-        
+        half_life = min_num_steps // num_stairs
+        if save_steps is None: 
+            learn_save_path = None
+        else:
+            learn_save_path = save_path
         with tf.Session(graph=self._graph, config=config) as session:
             learn_time = self.learn(session,
                                     min_num_steps,
@@ -345,6 +377,8 @@ class MODEL(object):
                                     num_stairs,
                                     decay,
                                     stop_percent,
+                                    save_steps=save_steps,
+                                    save_path=learn_save_path,
                                     optional_feed_dict=optional_feed_dict,
                                     half_life_fixed=half_life_fixed,
                                     fixed_num_steps=fixed_num_steps)
@@ -358,18 +392,7 @@ class MODEL(object):
                                                      self._decay: decay},
                                                        session=session)  
             
-            if save_path is not None:
-                folder_list = save_path.split('/')[:-1]
-                if len(folder_list) > 0:
-                    current_folder = folder_list[0]
-                    for idx, folder in enumerate(folder_list):
-                        if idx > 0:
-                            current_folder += ('/' + folder)
-                        if not os.path.exists(current_folder):
-                            os.mkdir(current_folder)
-
-
-                self.saver.save(session, save_path)
+            self.save_graph(session, save_path)
         
         run_result = {"metadata": list(), "data": data_for_plot, "time": learn_time}
         if optional_feed_dict is None:
@@ -391,29 +414,39 @@ class MODEL(object):
         
         
     def run(self,
-            num_stairs,
-            decay,
-            train_frequency,
-            min_num_points,
-            stop_percent,
-            num_train_points_per_1_validation_point,
-            averaging_number,
-            optional_feed_dict=None,
-            print_intermediate_results=False,
+            num_stairs,                                       # number of times learning_rate is decreased while collecting min_num_points points for plot (half_life = min_num_points * train_frequency / num_stairs)
+            decay,                                            # a factor by which learning_rate is decreased
+            train_frequency,                                  # each 'train_frequency' steps loss and percent correctly predicted letters is calculated
+            min_num_points,                                   # minimum number of times loss and percent correctly predicted letters are calculated while learning (train points)
+            stop_percent,                                     # if during half total spent time loss decreased by less than 'stop_percent' percents learning process is stopped
+            num_train_points_per_1_validation_point,          # when train point is obtained validation may be performed
+            averaging_number,                                 # when train point percent is calculated results got on averaging_number chunks are averaged
+            fixed_number_of_steps=None,                       # if not None 'fixed_number_of_steps' learning iterations will be performed
+            optional_feed_dict=None,                          # it is sometimes needed to add variables to feed_dict in session.run 
+            print_intermediate_results=False,                 # if True results on every train_frequency steps are printed
             half_life_fixed=False,                            # name of node which is to be printed
-            add_operations=None, 
-            add_text_operations=None, 
-            print_steps=None,                       
-            validation_add_operations=None,
-            num_validation_prints=0,
-            validation_example_length=None,
-            fuse_texts=None):
+            add_operations=None,                              # list of names of python objects (could be tensors or lists of tensors or lists of lists of tensors) which values ought to be printed at steps 'print_steps'
+            add_text_operations=None,                         # list of names of tensors which can be transformed into text and which should be printed while learning. Only first chunk in batch is printed
+            print_steps=None,                                 # steps at which 'add_operations' and 'add_text_operations' are printed
+            block_validation=False,                           # if True validation will not be performed
+            validation_add_operations=None,                   # same as 'add_operations' only printed during processing of validation dataset
+            num_validation_prints=0,                          # number of validation characters for which validation_add_operations are printed
+            validation_example_length=None,                   # length of validation example chunk for which predictions are printed
+            fuse_texts=None,                                  # list of strings which are used as beginnings of sentences. Agent tries to continue fuse_texts and prints following 79 characters on the screen
+            debug=False,                                      # if True TensorFlow Debugger (tfdbg) Command-Line-Interface is enabled
+            allow_soft_placement=False,
+            log_device_placement=False,                       # passed to tf.ConfigProto
+            save_path=None,                                   # path to file which will be used for saving graph. If path does not exist it will be created
+            summarizing_logdir=None,                          # 'summarizing_logdir' is a path to directory for storing summaries
+            summary_dict=None):                               # a dictionary containing 'summaries_collection_frequency', 'summary_tensors' 
+                                                              # every 'summaries_collection_frequency'-th step summary is collected 
+                                                              # 'summary_tensors' is a list of collected summary tensors
         
         if not half_life_fixed and (self._last_num_steps > min_num_points * train_frequency):
             min_num_steps = self._last_num_steps
         else:
             min_num_steps = min_num_points * train_frequency
-        half_life = min_num_steps / num_stairs
+        half_life = min_num_steps // num_stairs
         
         if isinstance(self._valid_text, dict):
             data_for_plot = {'train': {'step': list(), 'percentage': list()}}
@@ -445,14 +478,16 @@ class MODEL(object):
                                                      1)
         
         averaging_number = min(averaging_number, train_frequency)
-        averaging_step = max(train_frequency/averaging_number, 1)
+        averaging_step = max(train_frequency//averaging_number, 1)
         average_summing_started = False
         
         losses = [0.]
 
-        config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=True)
+        config = tf.ConfigProto(allow_soft_placement=allow_soft_placement, log_device_placement=log_device_placement)
         with tf.Session(graph=self._graph, config=config) as session:
-            tf.initialize_all_variables().run()
+            if debug:
+                session = tf_debug.LocalCLIDebugWrapperSession(session)
+            session.run(tf.global_variables_initializer())
             if print_intermediate_results:
                 print('Initialized')
             start_time = time.clock()
@@ -467,8 +502,8 @@ class MODEL(object):
                     exec('real_to_print.append(%s)' % validation_add_operation) 
             if validation_add_operations is not None:
                 for real_operation in real_to_print:
-                    if isinstance(real_operation, list):
-                        if isinstance(real_operation[0], list):
+                    if isinstance(real_operation, list) or isinstance(real_operation, tuple):
+                        if isinstance(real_operation[0], list) or isinstance(real_operation[0], tuple):
                             for inner_list in real_operation:
                                 validation_operations.extend(inner_list)
                         else:
@@ -476,28 +511,75 @@ class MODEL(object):
                     else:
                         validation_operations.append(real_operation)
 
+            # composing the list of operations which should be performed while training
+            # 'train_operations' is a list which will be actually passed to 'session.run' func
             train_operations = [self._optimizer, self._loss, self._train_prediction, self._learning_rate]
+            train_operations_map = list()
+            # 'train_operations_map' is a list of length 6 (2 for edges of 'add_text_operations', 'add_operations', 'summary_dict['summary_tensors']')
+            # 'real_to_print_train' is a list of python objects constructed from 'add_operations'. It is done because 'add_operations' may contain lists which should be preprocessed.
             real_to_print_train = list()
+            # since 'add_text_operations' contains tensors, its contents added to 'train_operations' directly
+            pointer = 4             # pointer is a variable used for calculating borders of 'add_text_operations', 'add_operations', 'summary_dict['summary_tensors']' in 'train_operations'
             if add_text_operations is not None:
+                train_operations_map.append(pointer)
+                pointer += len(add_text_operations)
+                train_operations_map.append(pointer)
                 for add_text_operation in add_text_operations:
                     exec('train_operations.append(%s)' % add_text_operation)
+            else:
+                train_operations_map.append(None)
+                train_operations_map.append(None)
+            # 'add_operations' added to 'real_to_print_train'
             if add_operations is not None:
                 for train_operation in add_operations:
                     exec('real_to_print_train.append(%s)' % train_operation) 
+            # 'real_to_print_train' is processed
             if add_operations is not None:
+                train_operations_map.append(pointer)
                 for real_operation in real_to_print_train:
-                    if isinstance(real_operation, list):
-                        if isinstance(real_operation[0], list):
+                    if isinstance(real_operation, list) or isinstance(real_operation, tuple):
+                        if isinstance(real_operation[0], list) or isinstance(real_operation[0], tuple):
                             for inner_list in real_operation:
+                                pointer += len(inner_list)
                                 train_operations.extend(inner_list)
                         else:
+                            pointer += len(real_operation)
                             train_operations.extend(real_operation)
                     else:
+                        pointer += 1
                         train_operations.append(real_operation)
+                train_operations_map.append(pointer)
+            else:
+                train_operations_map.append(None)
+                train_operations_map.append(None)
+
+            if summarizing_logdir is not None:
+                writer = tf.summary.FileWriter(summarizing_logdir,
+                                               graph=self._graph) 
             
-            while not ((step - 1) % 10000 == 0 and
-                       (losses[len(losses) / 2] - losses[-1]) < losses[len(losses) / 2] * stop_percent / 100 and
-                       (len(losses) - 1) >= min_num_points / num_train_points_per_1_validation_point):
+            # 'summary_dict['summary_tensors']' is processed
+            if summary_dict is not None:
+                train_operations_map.append(pointer)
+                pointer += len(summary_dict['summary_tensors'])
+                train_operations_map.append(pointer)
+                for tensor_name in summary_dict['summary_tensors']:
+                    exec('train_operations.append(%s)' % tensor_name)
+
+            def fixed_logical_factor(step_parameter):
+                # returns True if learning should continue
+                if fixed_number_of_steps is None:
+                    return True
+                else:
+                    return step_parameter != fixed_number_of_steps
+            
+            # if 'fixed_number_of_steps' is None system stops learning when all of the following conditions are fulfilled
+            # 1. (step - 1) % 10000 == 0
+            # 2. difference between loss on step ('step'//2) and loss on current step is less the 'stop_percent' percents of loss on step ('step'//2)
+            # 3. at least 'min_num_points' elements are in 'losses' list
+            # if 'fixed_number_of_steps' is not None learning stops when  step == fixed_number_of_steps
+            while (not ((step - 1) % 10000 == 0 and
+                        (losses[len(losses) // 2] - losses[-1]) < losses[len(losses) // 2] * stop_percent / 100 and
+                        (len(losses) - 1) >= min_num_points // num_train_points_per_1_validation_point)) and fixed_logical_factor(step):
                 batches = self._train_batches.next()
                 feed_dict = {self._half_life: half_life, self._decay: decay}
                 for i in range(self._num_unrollings + 1):
@@ -509,17 +591,19 @@ class MODEL(object):
                     feed_dict.update(new_dict)
                 #print(train_operations)
                 train_res = session.run(train_operations,
-                                            feed_dict=feed_dict)
+                                        feed_dict=feed_dict)
                 l = train_res[1]
                 predictions = train_res[2]
                 lr = train_res[3]
                 if add_text_operations is not None:
-                    add_text_res = train_res[4:4+len(add_text_operations)]
-                    if add_operations is not None:
-                        add_train_res = train_res[4+len(add_text_operations):]
-                else:
-                    add_train_res = train_res[4:]
-                #print('len(add_train_res) = %s' % len(add_train_res))
+                    add_text_res = train_res[train_operations_map[0]:train_operations_map[1]]
+                if add_operations is not None:
+                    add_train_res = train_res[train_operations_map[2]:train_operations_map[3]]
+                if summary_dict is not None:
+                    summary_res = train_res[train_operations_map[4]:train_operations_map[5]]
+                    
+                # print('len(add_train_res) = %s' % len(add_train_res))
+                # implementing printing of 'add_text_operations' and 'add_operations'
                 if print_steps is not None:
                     if step in print_steps:        
                         print("step: %s" % step)
@@ -534,12 +618,12 @@ class MODEL(object):
                         if add_operations is not None:
                             print_counter = 0
                             for train_add_operation, real_operation in zip(add_operations, real_to_print_train):
-                                if isinstance(real_operation, list):
+                                if isinstance(real_operation, list) or isinstance(real_operation, tuple):
                                     print('%s: ' % train_add_operation)
-                                    if isinstance(real_operation[0], list):
+                                    if isinstance(real_operation[0], list) or isinstance(real_operation[0], tuple):
                                         for list_idx in range(len(real_operation)):
                                             print(' '*2, '[%s]:' % list_idx)
-                                            for tensor_idx in range(len(real_operation[0])):
+                                            for tensor_idx in range(len(real_operation[list_idx])):
                                                 print(' '*4, '[%s][%s]:' % (list_idx, tensor_idx), add_train_res[print_counter])
                                                 print_counter += 1
                                     else:
@@ -549,76 +633,124 @@ class MODEL(object):
                                 else:
                                     print('%s: ' % train_add_operation, add_train_res[print_counter])
                                     print_counter += 1
+
+                # adding summaries
+                if summary_dict is not None: 
+                    for res in summary_res:
+                        writer.add_summary(res, step)
         
                 mean_loss += l
-                if ((step - (step / train_frequency) * train_frequency) % averaging_step == 0) and average_summing_started:
+                if ((step - (step // train_frequency) * train_frequency) % averaging_step == 0) and average_summing_started:
                     labels = np.concatenate(list(batches)[1:])
                     average_percentage_of_correct += percent_of_correct_predictions(predictions, labels)
                 average_summing_started = True
-                
+
+                                    
                 if step % train_frequency == 0:
                     if step > 0:
                         average_percentage_of_correct /= averaging_number
                         data_for_plot['train']['step'].append(step)
                         data_for_plot['train']['percentage'].append(average_percentage_of_correct)
-                    if step % (train_frequency * num_train_points_per_1_validation_point) == 0:
-                        if step > 0:
-                            mean_loss = mean_loss / (train_frequency * num_train_points_per_1_validation_point)
-                            # The mean loss is an estimate of the loss over the last few batches.
+                    if not block_validation:
+                        if step % (train_frequency * num_train_points_per_1_validation_point) == 0:
+                            if step > 0:
+                                mean_loss = mean_loss / (train_frequency * num_train_points_per_1_validation_point)
+                                # The mean loss is an estimate of the loss over the last few batches.
 
-                            losses.append(mean_loss)
-                        
-                        if print_intermediate_results:
-                            print('Average loss at step %d: %f learning rate: %f' % (step, mean_loss, lr))
-                            print('Percentage_of correct: %.2f%%' % average_percentage_of_correct)
-                            if step % (train_frequency * num_train_points_per_1_validation_point * 10) == 0:
-                                # Generate some samples.
-                                print("\nrandom:")
-                                print('=' * 80)
-                                for _ in range(5):
-                                    feed = sample(random_distribution(self._vocabulary_size), self._vocabulary_size)
-                                    sentence = characters(feed, self._vocabulary)[0]
-                                    self._reset_sample_state.run()
-                                    for _ in range(79):
-                                        prediction = self._sample_prediction.eval({self._sample_input: feed})
-                                        feed = sample(prediction, self._vocabulary_size)
-                                        sentence += characters(feed, self._vocabulary)[0]
-                                    print(sentence)
-                                print('=' * 80)
-                                if fuse_texts is not None:
-                                    print("\nfrom fuse:")
+                                losses.append(mean_loss)
+                            
+                            if print_intermediate_results:
+                                print('Average loss at step %d: %f learning rate: %f' % (step, mean_loss, lr))
+                                print('Percentage_of correct: %.2f%%' % average_percentage_of_correct)
+                                if step % (train_frequency * num_train_points_per_1_validation_point * 10) == 0:
+                                    # Generate some samples.
+                                    print("\nrandom:")
                                     print('=' * 80)
-                                    for fuse_idx, fuse in enumerate(fuse_texts):
-                                        print("%s. fuse: %s" % (fuse_idx, fuse))
-                                        fuse_list = list()
-                                        for fuse_char in fuse:
-                                            new_one_hot = np.zeros(shape=[1, self._vocabulary_size], dtype=np.float)
-                                            new_one_hot[0, char2id(fuse_char, self._characters_positions_in_vocabulary)] = 1.
-                                            fuse_list.append(new_one_hot)
-                                        sentence = u''
-                                        sentence += fuse
+                                    for _ in range(5):
+                                        feed = sample(random_distribution(self._vocabulary_size), self._vocabulary_size)
+                                        sentence = characters(feed, self._vocabulary)[0]
                                         self._reset_sample_state.run()
-                                        for fuse_one_hot in fuse_list[:-1]:
-                                            _ = self._sample_prediction.eval({self._sample_input: fuse_one_hot})
-                                        feed = fuse_list[-1]
                                         for _ in range(79):
                                             prediction = self._sample_prediction.eval({self._sample_input: feed})
                                             feed = sample(prediction, self._vocabulary_size)
                                             sentence += characters(feed, self._vocabulary)[0]
                                         print(sentence)
                                     print('=' * 80)
-                                
-                        mean_loss = 0
-                        # Measure validation set perplexity.
-                        self._reset_sample_state.run()
-                        validation_percentage_of_correct = 0.
-                        if validation_example_length is not None:
-                            fact = u''
-                            predicted = u''
-                        if isinstance(self._valid_batches, dict):
-                            for key in self._valid_batches.keys():
-                                for idx in range(self._valid_size[key]):
-                                    b = self._valid_batches[key].next()
+                                    if fuse_texts is not None:
+                                        print("\nfrom fuse:")
+                                        print('=' * 80)
+                                        for fuse_idx, fuse in enumerate(fuse_texts):
+                                            print("%s. fuse: %s" % (fuse_idx, fuse))
+                                            fuse_list = list()
+                                            for fuse_char in fuse:
+                                                new_one_hot = np.zeros(shape=[1, self._vocabulary_size], dtype=np.float)
+                                                new_one_hot[0, char2id(fuse_char, self._characters_positions_in_vocabulary)] = 1.
+                                                fuse_list.append(new_one_hot)
+                                            sentence = u''
+                                            sentence += fuse
+                                            self._reset_sample_state.run()
+                                            for fuse_one_hot in fuse_list[:-1]:
+                                                _ = self._sample_prediction.eval({self._sample_input: fuse_one_hot})
+                                            feed = fuse_list[-1]
+                                            for _ in range(79):
+                                                prediction = self._sample_prediction.eval({self._sample_input: feed})
+                                                feed = sample(prediction, self._vocabulary_size)
+                                                sentence += characters(feed, self._vocabulary)[0]
+                                            print(sentence)
+                                        print('=' * 80)
+                                    
+                            mean_loss = 0
+                            # Measure validation set perplexity.
+                            self._reset_sample_state.run()
+                            validation_percentage_of_correct = 0.
+                            if validation_example_length is not None:
+                                fact = u''
+                                predicted = u''
+                            if isinstance(self._valid_batches, dict):
+                                for key in self._valid_batches.keys():
+                                    for idx in range(self._valid_size[key]):
+                                        b = self._valid_batches[key].next()
+                                        validation_result = session.run(validation_operations,
+                                                                        {self._sample_input: b[0]})
+                                        validation_percentage_of_correct += percent_of_correct_predictions(validation_result[0], b[1])
+                                        if print_intermediate_results:
+                                            if validation_add_operations is not None:
+                                                if idx < num_validation_prints:
+                                                    print('%s:' % idx)
+                                                    print_counter = 1
+                                                    for validation_add_operation, real_operation in zip(validation_add_operations, real_to_print):
+                                                        if isinstance(real_operation, list):
+                                                            print('%s: ' % validation_add_operation)
+                                                            if isinstance(real_operation[0], list):
+                                                                for list_idx in range(len(real_operation)):
+                                                                    print(' '*2, '[%s]:' % list_idx)
+                                                                    for tensor_idx in range(len(real_operation[0])):
+                                                                        print(' '*4, '[%s][%s]:' % (list_idx, tensor_idx), validation_result[print_counter])
+                                                                        print_counter += 1
+                                                            else:
+                                                                for tensor_idx in range(len(real_operation)):
+                                                                    print(' '*2, '[%s]:' % tensor_idx, validation_result[print_counter])
+                                                                    print_counter += 1
+                                                        else:
+                                                            print('%s: ' % validation_add_operation, validation_result[print_counter])
+                                                            print_counter += 1
+                                            if validation_example_length is not None:
+                                                if idx < validation_example_length:
+                                                    fact += characters(sample(b[0], self._vocabulary_size), self._vocabulary)[0]
+                                                    predicted += characters(sample(validation_result[0], self._vocabulary_size), self._vocabulary)[0]
+                                    
+                                    validation_percentage_of_correct /= self._valid_size[key]
+                                    if print_intermediate_results:
+                                        if validation_example_length is not None:
+                                            print('%s example (input and output):' % key)
+                                            print(fact)
+                                            print(predicted)
+                                        print('%s percentage of correct: %.2f%%\n' % (key, validation_percentage_of_correct))
+                                    data_for_plot[key]['step'].append(step)
+                                    data_for_plot[key]['percentage'].append(validation_percentage_of_correct)
+                            else:
+                                for idx in range(self._valid_size):
+                                    b = self._valid_batches.next()
                                     validation_result = session.run(validation_operations,
                                                                     {self._sample_input: b[0]})
                                     validation_percentage_of_correct += percent_of_correct_predictions(validation_result[0], b[1])
@@ -628,9 +760,9 @@ class MODEL(object):
                                                 print('%s:' % idx)
                                                 print_counter = 1
                                                 for validation_add_operation, real_operation in zip(validation_add_operations, real_to_print):
-                                                    if isinstance(real_operation, list):
+                                                    if isinstance(real_operation, list) or isinstance(real_operation, tuple):
                                                         print('%s: ' % validation_add_operation)
-                                                        if isinstance(real_operation[0], list):
+                                                        if isinstance(real_operation[0], list) or isinstance(real_operation[0], tuple):
                                                             for list_idx in range(len(real_operation)):
                                                                 print(' '*2, '[%s]:' % list_idx)
                                                                 for tensor_idx in range(len(real_operation[0])):
@@ -647,61 +779,23 @@ class MODEL(object):
                                             if idx < validation_example_length:
                                                 fact += characters(sample(b[0], self._vocabulary_size), self._vocabulary)[0]
                                                 predicted += characters(sample(validation_result[0], self._vocabulary_size), self._vocabulary)[0]
-                                
-                                validation_percentage_of_correct /= self._valid_size[key]
+                                    
+                                validation_percentage_of_correct /= self._valid_size
                                 if print_intermediate_results:
                                     if validation_example_length is not None:
-                                        print('%s example (input and output):' % key)
+                                        print('validation example (input and output):')
                                         print(fact)
                                         print(predicted)
-                                    print('%s percentage of correct: %.2f%%\n' % (key, validation_percentage_of_correct))
-                                data_for_plot[key]['step'].append(step)
-                                data_for_plot[key]['percentage'].append(validation_percentage_of_correct)
-                        else:
-                            for idx in range(self._valid_size):
-                                b = self._valid_batches.next()
-                                validation_result = session.run(validation_operations,
-                                                                {self._sample_input: b[0]})
-                                validation_percentage_of_correct += percent_of_correct_predictions(validation_result[0], b[1])
-                                if print_intermediate_results:
-                                    if validation_add_operations is not None:
-                                        if idx < num_validation_prints:
-                                            print('%s:' % idx)
-                                            print_counter = 1
-                                            for validation_add_operation, real_operation in zip(validation_add_operations, real_to_print):
-                                                if isinstance(real_operation, list):
-                                                    print('%s: ' % validation_add_operation)
-                                                    if isinstance(real_operation[0], list):
-                                                        for list_idx in range(len(real_operation)):
-                                                            print(' '*2, '[%s]:' % list_idx)
-                                                            for tensor_idx in range(len(real_operation[0])):
-                                                                print(' '*4, '[%s][%s]:' % (list_idx, tensor_idx), validation_result[print_counter])
-                                                                print_counter += 1
-                                                    else:
-                                                        for tensor_idx in range(len(real_operation)):
-                                                            print(' '*2, '[%s]:' % tensor_idx, validation_result[print_counter])
-                                                            print_counter += 1
-                                                else:
-                                                    print('%s: ' % validation_add_operation, validation_result[print_counter])
-                                                    print_counter += 1
-                                    if validation_example_length is not None:
-                                        if idx < validation_example_length:
-                                            fact += characters(sample(b[0], self._vocabulary_size), self._vocabulary)[0]
-                                            predicted += characters(sample(validation_result[0], self._vocabulary_size), self._vocabulary)[0]
-                                
-                            validation_percentage_of_correct /= self._valid_size
-                            if print_intermediate_results:
-                                if validation_example_length is not None:
-                                    print('validation example (input and output):')
-                                    print(fact)
-                                    print(predicted)
-                                print('Validation percentage of correct: %.2f%%\n' % validation_percentage_of_correct)
-                            data_for_plot['validation']['step'].append(step)
-                            data_for_plot['validation']['percentage'].append(validation_percentage_of_correct)
+                                    print('Validation percentage of correct: %.2f%%\n' % validation_percentage_of_correct)
+                                data_for_plot['validation']['step'].append(step)
+                                data_for_plot['validation']['percentage'].append(validation_percentage_of_correct)
                     average_percentage_of_correct = 0.
                     average_summing_started = False
                 step += 1
             finish_time = time.clock()
+            if save_path is not None:
+                self.save_graph(session, save_path)
+
         self._last_num_steps = step
         run_result = {"metadata": list(), "data": data_for_plot, "time": (finish_time - start_time)}
         if optional_feed_dict is None:
@@ -716,14 +810,11 @@ class MODEL(object):
         self._results.append(run_result)
 
         
-        if len(data_for_plot['train']['percentage']) < min_num_points:
-            print("ERROR! failed to get enough data points")
-        else:
-            print("Number of steps = %s     Percentage = %.2f%%     Time = %.fs     Learning rate = %.4f" % 
-                  (step,
-                   sum(data_for_plot["train"]["percentage"][-1: -1 - min_num_points / 5: -1]) / (min_num_points / 5),
-                   run_result["time"],
-                   lr))
+        print("Number of steps = %s     Percentage = %.2f%%     Time = %.fs     Learning rate = %.4f" % 
+              (step,
+               sum(data_for_plot["train"]["percentage"][-1: -1 - min_num_points // 5: -1]) / (min_num_points // 5),
+               run_result["time"],
+               lr))
 
         
     def plot(self, results_numbers, plot_validation=False, save=False, save_folder=None):
@@ -881,7 +972,7 @@ class MODEL(object):
                           *args): # analitics arguments, learning arguments
         """learning arguments and analitic arguments are lists of arguments
         passed to learn and analitic_function methods"""
-        config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=True)
+        config = tf.ConfigProto(allow_soft_placement=False, log_device_placement=False)
 
         with tf.Session(graph=self._graph, config=config) as session:
             if save_path is None:
@@ -899,8 +990,8 @@ class MODEL(object):
                    decay,
                    optional_feed_dict=None,
                    fixed_num_steps=False):
-        config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=True)
-        half_life = min_num_steps / num_stairs
+        config = tf.ConfigProto(allow_soft_placement=False, log_device_placement=True)
+        half_life = min_num_steps // num_stairs
         if self._train_batches is None:
             self._train_batches = BatchGenerator(self._train_text,
                                                  self._batch_size,
@@ -962,3 +1053,6 @@ class MODEL(object):
             for intermediate_var, run_result in zip(intermediate_vars, run_results[:-1]):
                 intermediate_results[intermediate_var].append(run_result)
         return (model_results, intermediate_results, self._valid_text[:length])
+
+
+              

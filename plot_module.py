@@ -1459,6 +1459,64 @@ def text_gates_plot(text, data, title, folder_list, filename, vmin=0., vmax=1., 
     if show:
          plt.show()
     plt.close()  
+
+def text_boundaries_plot(text, data, title, folder_list, filename, show=False):
+    font = {'family' : 'normal',
+            'weight' : 'bold',
+            'size'   : 16}
+    matplotlib.rc('font', **font)
+
+    # forming an array containing data for plot
+    # the first row is for x coordinate
+    # the second is for y coordinate
+    # the third row defines color
+    hist_data = np.ndarray(shape = (len(text)*len(data), 3), dtype = type(data[0][0]))
+    dims = [len(data), len(text)]
+    for i in range(len(text)):
+        for j in range(len(data)):
+            hist_data[dims[1] * j + i, 0] = i
+            hist_data[dims[1] * j + i, 1] = j
+            hist_data[dims[1] * j + i, 2] = data[j][i]
+
+    # 'borders' array is used for controling where the edges of histogram will be
+    # it is concatenated with 'hist_data' and contains information in same format yet
+    # weights parameter is 0 for all border data
+    borders = np.ndarray(shape = (4, 3), dtype = type(data[0][0]))
+    for i in range(2):
+        for j in range(2):
+            borders[i*2+j, 0] = i * len(text)
+            borders[i*2+j, 1] = j * len(data)
+            borders[i*2+j, 2] = 0.
+    hist_data = np.concatenate((hist_data, borders), axis=0)
+    norm = matplotlib.colors.Normalize(vmin=0., vmax=1.)
+    plt.hist2d(hist_data[:, 0], hist_data[:, 1], bins = [dims[1], dims[0]], weights = hist_data[:, 2], norm=norm, cmap='Greys')
+    plt.title(title, fontsize=14)
+    # locs are shifted to the right by 0.5. That ensures characters will be right below its data
+    xlocs = [0.5+i for i in range(len(text))]
+    xlabels = [text[i] for i in range(len(text))]
+    plt.xticks(xlocs, xlabels)
+
+    """ylocs = [0.5+i for i in range(len(data))]
+    ylabels = [str(i) for i in range(len(data))]
+    plt.yticks(ylocs, ylabels)"""    
+    """x_horisontal = [0, len(text)]
+    for i in range(len(data) - 1):
+        plt.plot(x_horisontal, [i+1, i+1], 'w', lw=2)
+    y_vertical = [0, len(data)]
+    for i in range(len(text) - 1):
+        plt.plot([i+1, i+1], y_vertical, 'w', lw=2)"""    
+    null_formatter = matplotlib.ticker.NullFormatter()
+    ax = plt.gca()
+    fig = plt.gcf()
+    ax.get_yaxis().set_major_formatter(null_formatter)
+    ax.tick_params(length=0)
+    inches_per_char = 0.25
+    fig.set_size_inches(inches_per_char*len(text), inches_per_char * (len(data) + 3))   
+    plt.tight_layout()
+    save_figure(folder_list, filename)
+    if show:
+         plt.show()
+    plt.close()
         
     
 
