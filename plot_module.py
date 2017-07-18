@@ -1489,7 +1489,7 @@ def text_boundaries_plot(text, data, title, folder_list, filename, show=False):
             borders[i*2+j, 2] = 0.
     hist_data = np.concatenate((hist_data, borders), axis=0)
     norm = matplotlib.colors.Normalize(vmin=0., vmax=1.)
-    plt.hist2d(hist_data[:, 0], hist_data[:, 1], bins = [dims[1], dims[0]], weights = hist_data[:, 2], norm=norm, cmap='Greys')
+    plt.hist2d(hist_data[:, 0], hist_data[:, 1], bins = [dims[1], dims[0]], weights = hist_data[:, 2], norm=norm, cmap='gray')
     plt.title(title, fontsize=14)
     # locs are shifted to the right by 0.5. That ensures characters will be right below its data
     xlocs = [0.5+i for i in range(len(text))]

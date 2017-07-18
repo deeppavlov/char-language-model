@@ -10,6 +10,7 @@ import zipfile
 from six.moves import range
 from six.moves.urllib.request import urlretrieve
 import collections
+import matplotlib
 import matplotlib.pyplot as plt
 import codecs
 import time
@@ -20,6 +21,24 @@ from tensorflow.python import debug as tf_debug
 
 url = 'http://mattmahoney.net/dc/'
 
+colors = {0: 'k',
+          1: 'blue',
+          2: 'darkgoldenrod',
+          3: 'firebrick',
+          4: 'cyan',
+          5: 'gray',
+          6: 'm',
+          7: 'green',
+          8: 'yellow',
+          9: 'purple',
+          10: 'r',
+          11: '#E24A33',
+          12: '#92C6FF', 
+          13: '#0072B2',
+          14: '#30a2da',
+          15: '#4C72B0',
+          16: '#8EBA42',
+          17: '#6d904f'}
 
 def maybe_download(filename, expected_bytes):
   #Download a file if not present, and make sure it's the right size.
@@ -173,7 +192,22 @@ def percent_of_correct_predictions(predictions, labels):
             num_correct += 1
     return float(num_correct) / num_characters * 100
 
+def compute_perplexity(probabilities):
+    log_probs = np.log2(probabilities)
+    entropy_by_character = np.sum(- probabilities * log_probs, axis=1)
+    return np.exp2(np.mean(entropy_by_character))
 
+# bits per character
+def compute_BPC(predictions, labels):
+    log_predictions = np.log2(predictions)
+    BPC_by_character = np.sum(- labels * log_predictions, axis=1)
+    return np.mean(BPC_by_character)
+
+def compute_BPC_and_perplexity(predictions, labels):
+    log_predictions = np.log2(predictions)
+    entropy_by_character = np.sum(- predictions * log_predictions, axis=1)
+    BPC_by_character = np.sum(- labels * log_predictions, axis=1)
+    return np.mean(BPC_by_character), np.exp2(np.mean(entropy_by_character))
 
 class MODEL(object):
     _train_batches = None
@@ -334,16 +368,19 @@ class MODEL(object):
         data_for_plot['train']['percentage'].append(average_percentage_of_correct)
         
         return data_for_plot
-        
-    def save_graph(self, session, save_path):
-        folder_list = save_path.split('/')[:-1]
+
+    def create_path(self, path):
+        folder_list = path.split('/')[:-1]
         if len(folder_list) > 0:
             current_folder = folder_list[0]
             for idx, folder in enumerate(folder_list):
                 if idx > 0:
                     current_folder += ('/' + folder)
                 if not os.path.exists(current_folder):
-                    os.mkdir(current_folder)
+                    os.mkdir(current_folder)        
+        
+    def save_graph(self, session, save_path):
+        self.create_path(save_path)
         self.saver.save(session, save_path)
 
 
@@ -411,6 +448,7 @@ class MODEL(object):
               run_result["data"]["train"]["percentage"][-1],
               run_result["time"],
               lr))
+              
         
         
     def run(self,
@@ -437,11 +475,26 @@ class MODEL(object):
             allow_soft_placement=False,
             log_device_placement=False,                       # passed to tf.ConfigProto
             save_path=None,                                   # path to file which will be used for saving graph. If path does not exist it will be created
+            path_to_file_for_saving_prints=None,              # path to file where everything apointed for printing is saved
             summarizing_logdir=None,                          # 'summarizing_logdir' is a path to directory for storing summaries
             summary_dict=None):                               # a dictionary containing 'summaries_collection_frequency', 'summary_tensors' 
                                                               # every 'summaries_collection_frequency'-th step summary is collected 
                                                               # 'summary_tensors' is a list of collected summary tensors
-        
+  
+        BPC_coef = 1./np.log(2)
+
+        if path_to_file_for_saving_prints is not None:
+            self.create_path(path_to_file_for_saving_prints)
+            file_object = open(path_to_file_for_saving_prints, 'w')
+      
+        def choose_where_to_print(*inputs):
+            if print_intermediate_results:
+                print(*inputs)
+            if path_to_file_for_saving_prints is not None:
+                for inp in inputs:
+                    file_object.write(str(inp))
+                file_object.write('\n')
+                
         if not half_life_fixed and (self._last_num_steps > min_num_points * train_frequency):
             min_num_steps = self._last_num_steps
         else:
@@ -449,12 +502,12 @@ class MODEL(object):
         half_life = min_num_steps // num_stairs
         
         if isinstance(self._valid_text, dict):
-            data_for_plot = {'train': {'step': list(), 'percentage': list()}}
+            data_for_plot = {'train': {'step': list(), 'percentage': list(), 'BPC': list(), 'perplexity': list()}}
             for key in self._valid_text.keys():
-                data_for_plot[key] = {'step': list(), 'percentage': list()}
+                data_for_plot[key] = {'step': list(), 'percentage': list(), 'BPC': list(), 'perplexity': list()}
         else:
-            data_for_plot = {'train': {'step': list(), 'percentage': list()},
-                             'validation': {'step': list(), 'percentage': list()}}
+            data_for_plot = {'train': {'step': list(), 'percentage': list(), 'BPC': list(), 'perplexity': list()},
+                             'validation': {'step': list(), 'percentage': list(), 'BPC': list(), 'perplexity': list()}}
         
         if self._train_batches is None:
             self._train_batches = BatchGenerator(self._train_text,
@@ -488,8 +541,7 @@ class MODEL(object):
             if debug:
                 session = tf_debug.LocalCLIDebugWrapperSession(session)
             session.run(tf.global_variables_initializer())
-            if print_intermediate_results:
-                print('Initialized')
+            choose_where_to_print('Initialized')
             start_time = time.clock()
             average_percentage_of_correct = 0.
             mean_loss = 0
@@ -609,29 +661,29 @@ class MODEL(object):
                         print("step: %s" % step)
                         if add_text_operations is not None:
                             for print_text_op, add_text_op_res in zip(add_text_operations, add_text_res):
-                                print('%s: ' % print_text_op)
+                                choose_where_to_print('%s: ' % print_text_op)
                                 add_text_chars = np.split(add_text_op_res, add_text_op_res.shape[0])
                                 add_text = u''
                                 for add_text_char in add_text_chars:
                                     add_text += characters(sample(add_text_char, self._vocabulary_size), self._vocabulary)[0] 
-                                print(add_text)
+                                choose_where_to_print(add_text)
                         if add_operations is not None:
                             print_counter = 0
                             for train_add_operation, real_operation in zip(add_operations, real_to_print_train):
                                 if isinstance(real_operation, list) or isinstance(real_operation, tuple):
-                                    print('%s: ' % train_add_operation)
+                                    choose_where_to_print('%s: ' % train_add_operation)
                                     if isinstance(real_operation[0], list) or isinstance(real_operation[0], tuple):
                                         for list_idx in range(len(real_operation)):
-                                            print(' '*2, '[%s]:' % list_idx)
+                                            choose_where_to_print(' '*2, '[%s]:' % list_idx)
                                             for tensor_idx in range(len(real_operation[list_idx])):
-                                                print(' '*4, '[%s][%s]:' % (list_idx, tensor_idx), add_train_res[print_counter])
+                                                choose_where_to_print(' '*4, '[%s][%s]:' % (list_idx, tensor_idx), add_train_res[print_counter])
                                                 print_counter += 1
                                     else:
                                         for tensor_idx in range(len(real_operation)):
-                                            print(' '*2, '[%s]:' % tensor_idx, add_train_res[print_counter])
+                                            choose_where_to_print(' '*2, '[%s]:' % tensor_idx, add_train_res[print_counter])
                                             print_counter += 1
                                 else:
-                                    print('%s: ' % train_add_operation, add_train_res[print_counter])
+                                    choose_where_to_print('%s: ' % train_add_operation, add_train_res[print_counter])
                                     print_counter += 1
 
                 # adding summaries
@@ -651,6 +703,8 @@ class MODEL(object):
                         average_percentage_of_correct /= averaging_number
                         data_for_plot['train']['step'].append(step)
                         data_for_plot['train']['percentage'].append(average_percentage_of_correct)
+                        data_for_plot['train']['BPC'].append(BPC_coef * l)
+                        data_for_plot['train']['perplexity'].append(compute_perplexity(predictions))
                     if not block_validation:
                         if step % (train_frequency * num_train_points_per_1_validation_point) == 0:
                             if step > 0:
@@ -659,13 +713,13 @@ class MODEL(object):
 
                                 losses.append(mean_loss)
                             
-                            if print_intermediate_results:
-                                print('Average loss at step %d: %f learning rate: %f' % (step, mean_loss, lr))
-                                print('Percentage_of correct: %.2f%%' % average_percentage_of_correct)
+                            if print_intermediate_results or (path_to_file_for_saving_prints is not None):
+                                choose_where_to_print('Average loss at step %d: %f learning rate: %f' % (step, mean_loss, lr))
+                                choose_where_to_print('Percentage_of correct: %.2f%%' % average_percentage_of_correct)
                                 if step % (train_frequency * num_train_points_per_1_validation_point * 10) == 0:
                                     # Generate some samples.
-                                    print("\nrandom:")
-                                    print('=' * 80)
+                                    choose_where_to_print("\nrandom:")
+                                    choose_where_to_print('=' * 80)
                                     for _ in range(5):
                                         feed = sample(random_distribution(self._vocabulary_size), self._vocabulary_size)
                                         sentence = characters(feed, self._vocabulary)[0]
@@ -674,13 +728,13 @@ class MODEL(object):
                                             prediction = self._sample_prediction.eval({self._sample_input: feed})
                                             feed = sample(prediction, self._vocabulary_size)
                                             sentence += characters(feed, self._vocabulary)[0]
-                                        print(sentence)
-                                    print('=' * 80)
+                                        choose_where_to_print(sentence)
+                                    choose_where_to_print('=' * 80)
                                     if fuse_texts is not None:
-                                        print("\nfrom fuse:")
-                                        print('=' * 80)
+                                        choose_where_to_print("\nfrom fuse:")
+                                        choose_where_to_print('=' * 80)
                                         for fuse_idx, fuse in enumerate(fuse_texts):
-                                            print("%s. fuse: %s" % (fuse_idx, fuse))
+                                            choose_where_to_print("%s. fuse: %s" % (fuse_idx, fuse))
                                             fuse_list = list()
                                             for fuse_char in fuse:
                                                 new_one_hot = np.zeros(shape=[1, self._vocabulary_size], dtype=np.float)
@@ -696,43 +750,48 @@ class MODEL(object):
                                                 prediction = self._sample_prediction.eval({self._sample_input: feed})
                                                 feed = sample(prediction, self._vocabulary_size)
                                                 sentence += characters(feed, self._vocabulary)[0]
-                                            print(sentence)
-                                        print('=' * 80)
+                                            choose_where_to_print(sentence)
+                                        choose_where_to_print('=' * 80)
                                     
                             mean_loss = 0
                             # Measure validation set perplexity.
                             self._reset_sample_state.run()
-                            validation_percentage_of_correct = 0.
                             if validation_example_length is not None:
                                 fact = u''
                                 predicted = u''
                             if isinstance(self._valid_batches, dict):
                                 for key in self._valid_batches.keys():
+                                    validation_percentage_of_correct = 0.
+                                    validation_BPC = 0.
+                                    validation_perplexity = 0.
                                     for idx in range(self._valid_size[key]):
                                         b = self._valid_batches[key].next()
                                         validation_result = session.run(validation_operations,
                                                                         {self._sample_input: b[0]})
                                         validation_percentage_of_correct += percent_of_correct_predictions(validation_result[0], b[1])
-                                        if print_intermediate_results:
+                                        cur_BPC, cur_perplex = compute_BPC_and_perplexity(validation_result[0], b[1])
+                                        validation_BPC += cur_BPC
+                                        validation_perplexity += cur_cur_perplex
+                                        if print_intermediate_results or (path_to_file_for_saving_prints is not None):
                                             if validation_add_operations is not None:
                                                 if idx < num_validation_prints:
-                                                    print('%s:' % idx)
+                                                    choose_where_to_print('%s:' % idx)
                                                     print_counter = 1
                                                     for validation_add_operation, real_operation in zip(validation_add_operations, real_to_print):
                                                         if isinstance(real_operation, list):
-                                                            print('%s: ' % validation_add_operation)
+                                                            choose_where_to_print('%s: ' % validation_add_operation)
                                                             if isinstance(real_operation[0], list):
                                                                 for list_idx in range(len(real_operation)):
-                                                                    print(' '*2, '[%s]:' % list_idx)
+                                                                    choose_where_to_print(' '*2, '[%s]:' % list_idx)
                                                                     for tensor_idx in range(len(real_operation[0])):
-                                                                        print(' '*4, '[%s][%s]:' % (list_idx, tensor_idx), validation_result[print_counter])
+                                                                        choose_where_to_print(' '*4, '[%s][%s]:' % (list_idx, tensor_idx), validation_result[print_counter])
                                                                         print_counter += 1
                                                             else:
                                                                 for tensor_idx in range(len(real_operation)):
-                                                                    print(' '*2, '[%s]:' % tensor_idx, validation_result[print_counter])
+                                                                    choose_where_to_print(' '*2, '[%s]:' % tensor_idx, validation_result[print_counter])
                                                                     print_counter += 1
                                                         else:
-                                                            print('%s: ' % validation_add_operation, validation_result[print_counter])
+                                                            choose_where_to_print('%s: ' % validation_add_operation, validation_result[print_counter])
                                                             print_counter += 1
                                             if validation_example_length is not None:
                                                 if idx < validation_example_length:
@@ -740,40 +799,50 @@ class MODEL(object):
                                                     predicted += characters(sample(validation_result[0], self._vocabulary_size), self._vocabulary)[0]
                                     
                                     validation_percentage_of_correct /= self._valid_size[key]
-                                    if print_intermediate_results:
+                                    validation_BPC /= self._valid_size[key]
+                                    validation_perplexity /= self._valid_size[key]
+                                    if print_intermediate_results or (path_to_file_for_saving_prints is not None):
                                         if validation_example_length is not None:
-                                            print('%s example (input and output):' % key)
-                                            print(fact)
-                                            print(predicted)
-                                        print('%s percentage of correct: %.2f%%\n' % (key, validation_percentage_of_correct))
+                                            choose_where_to_print('%s example (input and output):' % key)
+                                            choose_where_to_print(fact)
+                                            choose_where_to_print(predicted)
+                                        choose_where_to_print('%s percentage of correct: %.2f%%\n' % (key, validation_percentage_of_correct))
                                     data_for_plot[key]['step'].append(step)
                                     data_for_plot[key]['percentage'].append(validation_percentage_of_correct)
+                                    data_for_plot[key]['BPC'].append(validation_BPC)
+                                    data_for_plot[key]['perplexity'].append(validation_perplexity)
                             else:
+                                validation_percentage_of_correct = 0.
+                                validation_BPC = 0.
+                                validation_perplexity = 0.
                                 for idx in range(self._valid_size):
                                     b = self._valid_batches.next()
                                     validation_result = session.run(validation_operations,
                                                                     {self._sample_input: b[0]})
                                     validation_percentage_of_correct += percent_of_correct_predictions(validation_result[0], b[1])
-                                    if print_intermediate_results:
+                                    cur_BPC, cur_perplex = compute_BPC_and_perplexity(validation_result[0], b[1])
+                                    validation_BPC += cur_BPC
+                                    validation_perplexity += cur_perplex
+                                    if print_intermediate_results or (path_to_file_for_saving_prints is not None):
                                         if validation_add_operations is not None:
                                             if idx < num_validation_prints:
-                                                print('%s:' % idx)
+                                                choose_where_to_print('%s:' % idx)
                                                 print_counter = 1
                                                 for validation_add_operation, real_operation in zip(validation_add_operations, real_to_print):
                                                     if isinstance(real_operation, list) or isinstance(real_operation, tuple):
-                                                        print('%s: ' % validation_add_operation)
+                                                        choose_where_to_print('%s: ' % validation_add_operation)
                                                         if isinstance(real_operation[0], list) or isinstance(real_operation[0], tuple):
                                                             for list_idx in range(len(real_operation)):
-                                                                print(' '*2, '[%s]:' % list_idx)
+                                                                choose_where_to_print(' '*2, '[%s]:' % list_idx)
                                                                 for tensor_idx in range(len(real_operation[0])):
-                                                                    print(' '*4, '[%s][%s]:' % (list_idx, tensor_idx), validation_result[print_counter])
+                                                                    choose_where_to_print(' '*4, '[%s][%s]:' % (list_idx, tensor_idx), validation_result[print_counter])
                                                                     print_counter += 1
                                                         else:
                                                             for tensor_idx in range(len(real_operation)):
-                                                                print(' '*2, '[%s]:' % tensor_idx, validation_result[print_counter])
+                                                                choose_where_to_print(' '*2, '[%s]:' % tensor_idx, validation_result[print_counter])
                                                                 print_counter += 1
                                                     else:
-                                                        print('%s: ' % validation_add_operation, validation_result[print_counter])
+                                                        choose_where_to_print('%s: ' % validation_add_operation, validation_result[print_counter])
                                                         print_counter += 1
                                         if validation_example_length is not None:
                                             if idx < validation_example_length:
@@ -781,14 +850,18 @@ class MODEL(object):
                                                 predicted += characters(sample(validation_result[0], self._vocabulary_size), self._vocabulary)[0]
                                     
                                 validation_percentage_of_correct /= self._valid_size
-                                if print_intermediate_results:
+                                validation_BPC /= self._valid_size
+                                validation_perplexity /= self._valid_size
+                                if print_intermediate_results or (path_to_file_for_saving_prints is not None):
                                     if validation_example_length is not None:
-                                        print('validation example (input and output):')
-                                        print(fact)
-                                        print(predicted)
-                                    print('Validation percentage of correct: %.2f%%\n' % validation_percentage_of_correct)
+                                        choose_where_to_print('validation example (input and output):')
+                                        choose_where_to_print(fact)
+                                        choose_where_to_print(predicted)
+                                    choose_where_to_print('Validation percentage of correct: %.2f%%\n' % validation_percentage_of_correct)
                                 data_for_plot['validation']['step'].append(step)
                                 data_for_plot['validation']['percentage'].append(validation_percentage_of_correct)
+                                data_for_plot['validation']['BPC'].append(validation_BPC)
+                                data_for_plot['validation']['perplexity'].append(validation_perplexity)
                     average_percentage_of_correct = 0.
                     average_summing_started = False
                 step += 1
@@ -810,93 +883,54 @@ class MODEL(object):
         self._results.append(run_result)
 
         
-        print("Number of steps = %s     Percentage = %.2f%%     Time = %.fs     Learning rate = %.4f" % 
+        choose_where_to_print("Number of steps = %s     Percentage = %.2f%%     Time = %.fs     Learning rate = %.4f" % 
               (step,
                sum(data_for_plot["train"]["percentage"][-1: -1 - min_num_points // 5: -1]) / (min_num_points // 5),
                run_result["time"],
                lr))
 
-        
-    def plot(self, results_numbers, plot_validation=False, save=False, save_folder=None):
+    def plot(self, xlists, ylists, labels, y_label, save_folder=None, show=False):
         plt.close()
-        colors = {0: 'k',
-                  1: 'blue',
-                  2: 'darkgoldenrod',
-                  3: 'firebrick',
-                  4: 'cyan',
-                  5: 'gray',
-                  6: 'm',
-                  7: 'green',
-                  8: 'yellow',
-                  9: 'purple',
-                  10: 'r',
-                  11: '#E24A33',
-                  12: '#92C6FF', 
-                  13: '#0072B2',
-                  14: '#30a2da',
-                  15: '#4C72B0',
-                  16: '#8EBA42',
-                  17: '#6d904f'}
         fig = plt.figure(1)
-        for i in range(len(results_numbers)):
-            x_list = self._results[results_numbers[i]]["data"]['train']['step']
-            y_list = self._results[results_numbers[i]]["data"]['train']['percentage']
-            plt.plot(x_list, y_list, colors[i % 19])
-            if plot_validation:
-                if 'validation' in self._results[results_numbers[i]]["data"]:
-                    x_list = self._results[results_numbers[i]]["data"]['validation']['step']
-                    y_list = self._results[results_numbers[i]]["data"]['validation']['percentage']
-                    plt.plot(x_list, y_list, color=colors[i], linestyle='dashed')
-                else:
-                    if len(results_numbers) > 1:
-                        print('If several validations only 1 result is allowed')
-                        return 0
-                    validations_counter = 1
-                    for key in self._results[results_numbers[i]]["data"]:
-                        if key != 'train':
-                            x_list = self._results[results_numbers[i]]["data"][key]['step']
-                            y_list = self._results[results_numbers[i]]["data"][key]['percentage']
-                            plt.plot(x_list, y_list, color=colors[validations_counter], linestyle='solid')
-                            validations_counter += 1
-        num_layers_string = self._results[results_numbers[i]]["metadata"][self._indices["num_layers"]]
-        num_unrollings_string = self._results[results_numbers[i]]["metadata"][self._indices["num_unrollings"]]
-        plt.title('Number of layers = %s; Number of unrollings = %s' % (num_layers_string,
-                                                                        num_unrollings_string))
-        
-
+        for line_idx, ylist in enumerate(ylists):
+            plt.plot(xlists[line_idx], ylist, colors[line_idx % 19])
         plt.xlabel('step')
-        plt.ylabel('percentage of correct')
+        plt.ylabel(y_label)        
         x1, x2, y1, y2 = plt.axis()
-        
-        text_labels = list()
-        if 'validation' in self._results[results_numbers[0]]["data"]:
-            for i in range(len(results_numbers)):
-                text_label = ""
-                text_label += ("time = %.fs;" % self._results[results_numbers[i]]["time"])
-                text_label += (" half life = %s;" % self._results[results_numbers[i]]["metadata"][self._indices["half_life"]])
-                text_label += (" decay = %.1f;" % self._results[results_numbers[i]]["metadata"][self._indices["decay"]])
-                text_labels.append(text_label)
-        else:
-            for key in self._results[results_numbers[i]]["data"].keys():
-                text_label = key
-                text_labels.append(text_label)
         help_text = list()
-        for i in range(len(text_labels)):
-            vertical_position = y2 - float(y2 - y1) / (len(text_labels) + 1) * float(i+1)
-            help_text.append(plt.text(x2 + 0.05 * (x2 - x1), vertical_position, text_labels[i],  va = 'center', ha = 'left', color=colors[i]))
+        for label_idx, label in enumerate(labels):
+            vertical_position = y2 - float(y2 - y1) / (len(labels) + 1) * float(label_idx+1)
+            help_text.append(plt.text(x2 + 0.05 * (x2 - x1), vertical_position, label,  va = 'center', ha = 'left', color=colors[label_idx]))
         plt.grid()
-
-        if save:
+        num_nodes_list = ['%s' for _ in range(self._num_layers)]
+        num_nodes_string = '[' + ", ".join(num_nodes_list) + ']'
+        num_nodes_string = num_nodes_string % tuple(self._num_nodes)
+        plt.title('Number of nodes = %s; Number of unrollings = %s' % (num_nodes_string,
+                                                                        self._num_unrollings))
+        if save_folder is not None:
+            r = fig.canvas.get_renderer()
+            if len(help_text) != 0:
+                fig.set_size_inches(8, 5)
+                max_right = help_text[0].get_window_extent(renderer = r).get_points()[1][0]
+                min_left = plt.axes().get_window_extent().get_points()[1][0]
+                for text in help_text[1:]:
+                    x1 = text.get_window_extent(renderer = r).get_points()[1][0]
+                    if x1 > max_right:
+                        max_right = x1
+                coef = (2*min_left - max_right) / min_left
+                plt.tight_layout(rect=(0, 0, coef, 1))
+            else:
+                print("There is no labels on plot")
             nodes_string = "%s"
             if self._num_layers > 1:
                 for i in range(self._num_layers - 1):
                     nodes_string += "_%s"
                 nodes_string = '(' + nodes_string + ')'
-            plot_filename = "nl%s_;nn_%s;nu_%s;bs_%s;emb_%s" % (self._num_layers,
-                                                                nodes_string,
-                                                                self._num_unrollings,
-                                                                self._batch_size,
-                                                                False)
+            plot_filename = y_label + '_' + "nl%s_;nn_%s;nu_%s;bs_%s;emb_%s" % (self._num_layers,
+                                                                                nodes_string,
+                                                                                self._num_unrollings,
+                                                                                self._batch_size,
+                                                                                hasattr(self, '_embedding_size'))
             plot_filename = plot_filename % tuple(self._num_nodes)           
             if not os.path.exists(save_folder):
                 os.makedirs(save_folder)
@@ -904,62 +938,41 @@ class MODEL(object):
             while os.path.exists(save_folder + '/' + plot_filename + '#' + str(index) + '.png'):
                 index += 1
             plt.savefig(save_folder + '/' + plot_filename + '#' + str(index) + '.png')
+        if show:
+            plt.show()
 
-        plt.show()
-
-
-        text_right_edge = 0.
-        for i in range(len(help_text)):
-            if help_text[i].get_window_extent().get_points()[1][0] > text_right_edge:
-                text_right_edge = help_text[i].get_window_extent().get_points()[1][0]   
-        text_left_edge = help_text[0].get_window_extent().get_points()[0][0] 
-        plt.close()
         
-        """if save:
-            fig = plt.figure(1)
-            for i in range(len(results_numbers)):
-                x_list = self._results[results_numbers[i]]["data"]['train']['step']
-                y_list = self._results[results_numbers[i]]["data"]['train']['percentage']
-                plt.plot(x_list, y_list, colors[i % 19])
+
+    def plot_all(self, results_numbers, plot_validation=False, save_folder=None, show=False):
+        percentage_ylists = list()
+        perplexity_ylists = list()
+        BPC_ylists = list()
+        xlists = list()
+        labels = list()
+        def add_key_all(result_num, Key):
+            percentage_ylists.append(self._results[result_num]["data"][Key]['percentage'])
+            labels.append(Key)   
+            perplexity_ylists.append(self._results[result_num]["data"][Key]['perplexity'])
+            BPC_ylists.append(self._results[result_num]["data"][Key]['BPC'])
+            xlists.append(self._results[result_num]["data"][Key]['step'])             
+        if len(results_numbers) > 1:
+            for result_number in results_numbers:
+                add_key_all(result_number, 'train')
+                if plot_validation: 
+                    for key in self._results[result_number]["data"].keys():
+                        if key != 'train':
+                            add_key_all(result_number, key)
+        else:
+            result_number = results_numbers[0]
+            add_key_all(result_number, 'train')
+            for key in self._results[result_number]["data"].keys():
                 if plot_validation:
-                    x_list = self._results[results_numbers[i]]["data"]['validation']['step']
-                    y_list = self._results[results_numbers[i]]["data"]['validation']['percentage']
-                    plt.plot(x_list, y_list, color=colors[i], linestyle='dashed')
-            plt.xlabel('step')
-            plt.ylabel('percentage of correct') 
-            num_layers_string = self._results[results_numbers[i]]["metadata"][self._indices["num_layers"]]
-            num_unrollings_string = self._results[results_numbers[i]]["metadata"][self._indices["num_unrollings"]]
-            plt.title('Number of layers = %s; Number of unrollings = %s' % (num_layers_string,
-                                                                            num_unrollings_string))
-            for i in range(len(text_labels)):
-                vertical_position = y2 - float(y2 - y1) / (len(text_labels) + 1) * float(i+1) 
-                plt.text(x2 + 0.05 * (x2 - x1), vertical_position, text_labels[i],  va = 'center', ha = 'left', color=colors[i%18])
-                
-            coefficient = (2*text_left_edge - text_right_edge) / text_left_edge
-            plt.tight_layout(rect=(0, 0, coefficient, 1))
-            size = fig.get_size_inches()
-            fig.set_size_inches(size[0]/coefficient, size[1])
-            plt.grid()
-            
-            
-            nodes_string = "%s"
-            if self._num_layers > 1:
-                for i in range(self._num_layers - 1):
-                    nodes_string += "_%s"
-                nodes_string = '(' + nodes_string + ')'
-            plot_filename = "nl%s_;nn_%s;nu_%s;bs_%s;emb_%s" % (self._num_layers,
-                                                                nodes_string,
-                                                                self._num_unrollings,
-                                                                self._batch_size,
-                                                                False)
-            plot_filename = plot_filename % tuple(self._num_nodes)           
-            if not os.path.exists(save_folder):
-                os.makedirs(save_folder)
-            index = 0
-            while os.path.exists(save_folder + '/' + plot_filename + '#' + str(index) + '.png'):
-                index += 1
-            plt.savefig(save_folder + '/' + plot_filename + '#' + str(index) + '.png')
-            plt.close()"""
+                    if key != 'train':
+                        add_key_all(result_number, key)
+
+        self.plot(xlists, percentage_ylists, labels, 'percentage', save_folder=save_folder, show=show)
+        self.plot(xlists, perplexity_ylists, labels, 'perplexity', save_folder=save_folder, show=show)
+        self.plot(xlists, BPC_ylists, labels, 'BPC', save_folder=save_folder, show=show)
         
         
     def destroy(self):
@@ -990,7 +1003,7 @@ class MODEL(object):
                    decay,
                    optional_feed_dict=None,
                    fixed_num_steps=False):
-        config = tf.ConfigProto(allow_soft_placement=False, log_device_placement=True)
+        config = tf.ConfigProto(allow_soft_placement=False, log_device_placement=False)
         half_life = min_num_steps // num_stairs
         if self._train_batches is None:
             self._train_batches = BatchGenerator(self._train_text,
