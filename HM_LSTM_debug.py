@@ -1,7 +1,7 @@
 
 # coding: utf-8
 
-# In[ ]:
+# In[1]:
 
 
 # These are all the modules we'll be using later. Make sure you can import them
@@ -45,7 +45,7 @@ from model_module import MODEL
 version = sys.version_info[0]
 
 
-# In[ ]:
+# In[2]:
 
 
 if not os.path.exists('enwik8_filtered'):
@@ -87,7 +87,7 @@ else:
     print("total number of characters: ", number_of_characters)    
 
 
-# In[ ]:
+# In[3]:
 
 
 #different
@@ -107,7 +107,7 @@ print('\n\n\n')
 print(valid_text_2)
 
 
-# In[ ]:
+# In[4]:
 
 
 #different
@@ -120,7 +120,7 @@ print(train_size, train_text[:64])
 print(valid_size, valid_text[:64])
 
 
-# In[ ]:
+# In[5]:
 
 
 vocabulary_size = number_of_characters
@@ -155,7 +155,7 @@ print("id2char(78) = %s,  id2char(156) = %s,  id2char(140) = %s" % (id2char(78,
                                                                             vocabulary)))
 
 
-# In[ ]:
+# In[6]:
 
 
 batch_size_test=64
@@ -178,7 +178,9 @@ print(batches2string(valid_batches_test.next(), vocabulary))
 print(batches2string(valid_batches_test.next(), vocabulary))
 
 
-# In[ ]:
+# In[7]:
+
+
 # This class implements hierarchical LSTM described in the paper https://arxiv.org/pdf/1609.01704.pdf
 # All variables names and formula indices are taken from mentioned article
 # notation A^i stands for A with upper index i
@@ -248,13 +250,13 @@ class HM_LSTM(MODEL):
             # Matrices U^l_l, U^l_{l+1} and W^l_{l-1} are concatenated into one matrix self.Matrices[idx]
             # and vectors h^l_{t-1}, z^l_{t-1} x h^{l+1}_{t-1} and  z^{l-1}_t x h^{l-1}_t are 
             # concatenated into vector X
-            X = tf.concat([state[0], top_down_prepaired, bottom_up_prepaired],
+            X = tf.concat([bottom_up_prepaired, state[0], top_down_prepaired],
                           1,
                           name="X"+appendix)
             concat = tf.add(tf.matmul(X,
-                                      self.Matrices[idx],
+                                      self.Matrices[idx].read_value(),
                                       name="matmul_in_concat"+appendix),
-                            self.Biases[idx],
+                            self.Biases[idx].read_value(),
                             name="concat"+appendix)
 
             # following operations implement function vector implementation in formula (4)
@@ -272,11 +274,11 @@ class HM_LSTM(MODEL):
             [forget_gate, input_gate, output_gate] = tf.split(gate_concat,
                                                               3,
                                                               axis=1,
-                                                              name="split_to_gates_op")
+                                                              name="split_to_gates_op"+appendix)
             modification_vector = tf.sign(tanh_arg, name="modification_vector"+appendix)
             # self.compute_boundary_state works as step function in forward pass
             # and as hard sigm in backward pass 
-            boundary_state = self.debug_compute_boundary_state(hard_sigm_arg,
+            boundary_state, old_emb_idx, slice_start = self.debug_compute_boundary_state(hard_sigm_arg,
                                                                idx,
                                                                appendix) 
 
@@ -334,16 +336,13 @@ class HM_LSTM(MODEL):
                                                  name="add_in_update_term"+appendix),
                                           name="update_term"+appendix)
                 copy_term = tf.multiply(copy_flag, tr_memory, name="copy_term"+appendix)
+ 
                 
                 flush_term = tf.multiply(flush_flag,
-                                         tr_modification_vector,
-                                         name="flush_term"+appendix) 
-                
-                """flush_term = tf.multiply(flush_flag,
                                          tf.multiply(tr_input_gate,
                                                      tr_modification_vector,
                                                      name="multiply_input_and_modification_in_flush_term"+appendix),
-                                         name="flush_term"+appendix)"""
+                                         name="flush_term"+appendix)
                 
                 tr_new_memory = tf.add(tf.add(update_term,
                                               copy_term,
@@ -364,7 +363,9 @@ class HM_LSTM(MODEL):
                 new_hidden = tf.transpose(tf.add(copy_term, else_term, name="new_hidden"+appendix),
                                           name="new_hidden"+appendix)
                 
-                helper = {"L2_norm_of_hard_sigm_arg": L2_norm_of_hard_sigm_arg}
+                helper = {"L2_norm_of_hard_sigm_arg": L2_norm_of_hard_sigm_arg,
+                          "old_emb_idx": old_emb_idx,
+                          "slice_start": slice_start}
         return new_hidden, new_memory, boundary_state, helper
     
     def last_layer(self,
@@ -397,13 +398,13 @@ class HM_LSTM(MODEL):
             # in formula (4) are united in one operation
             # Matrices U^l_l and W^l_{l-1} are concatenated into one matrix self.Matrices[last] 
             # and vectors h^l_{t-1} and  z^{l-1}_t x h^{l-1}_t are concatenated into vector X
-            X = tf.concat([state[0], bottom_up_prepaired],
+            X = tf.concat([bottom_up_prepaired, state[0]],
                           1,
                           name="X"+appendix)                                          
             concat = tf.add(tf.matmul(X,
-                                      self.Matrices[last],
+                                      self.Matrices[last].read_value(),
                                       name="matmul_in_concat"+appendix),
-                            self.Biases[last],
+                            self.Biases[last].read_value(),
                             name="concat"+appendix)
 
             # following operations implement function vector implementation in formula (4)
@@ -491,25 +492,20 @@ class HM_LSTM(MODEL):
         # Elementwise calculates step function 
         # During backward pass works as hard sigm
         shape = X.get_shape().as_list()
-        old_emb_idx = tf.reshape(self.emb_idx, [1], name="old_emb_idx"+appendix)
-        with tf.control_dependencies([tf.assign(self.emb_idx,
-                                                tf.mod(self.emb_idx + 1,
-                                                       4,
-                                                       name="increment_emb_idx"+appendix),
-                                                name="new_emb_idx"+appendix)]):
-            slice_start = tf.concat([old_emb_idx, tf.constant([layer_idx])],
-                                    0,
-                                    name="slice_start"+appendix)
-            reshaped_slice = tf.reshape(tf.slice(self.debug_boundaries,
-                                                 slice_start,
-                                                 [1, 1],
-                                                 name="slice_from_debug_boundaries"+appendix),
-                                        [1, 1],
-                                        name="reshaped_slice"+appendix)
-            return_value = tf.tile(reshaped_slice,
-                                   shape,
-                                   name="fixed_boundaries"+appendix)
-        return return_value
+        idx = tf.mod(self._global_step, 30, name="mod_debug_compute_boundary_state"+appendix)
+        slice_start = tf.concat([[idx], tf.constant([layer_idx])],
+                                        0,
+                                        name="slice_start"+appendix)
+        reshaped_slice = tf.reshape(tf.slice(self.debug_boundaries,
+                                                     slice_start,
+                                                     [1, 1],
+                                                     name="slice_from_debug_boundaries"+appendix),
+                                            [1, 1],
+                                            name="reshaped_slice"+appendix)
+        return_value = tf.tile(reshaped_slice,
+                                       shape,
+                                       name="fixed_boundaries"+appendix)
+        return return_value, [idx], slice_start
     
     def iteration(self, inp, state, iter_idx, appendix):
         # This function implements processing of one character embedding by HM_LSTM
@@ -569,7 +565,12 @@ class HM_LSTM(MODEL):
             L2_norm_of_hard_sigm_arg_list = list()
             helper = {"L2_norm_of_hard_sigm_arg": tf.concat([helper["L2_norm_of_hard_sigm_arg"] for helper in not_last_layer_helpers],
                                                             1,
-                                                            name="L2_norm_of_hard_sigm_arg_for_all_layers"+appendix)}
+                                                            name="L2_norm_of_hard_sigm_arg_for_all_layers"+appendix),
+                      "old_emb_idx": tf.concat([helper['old_emb_idx'] for helper in not_last_layer_helpers],
+                                               0,
+                                               name='old_emb_idx'+appendix),
+                      "slice_start": tf.stack([helper['slice_start'] for helper in not_last_layer_helpers],
+                                              name="slice_start"+appendix)}
             return new_state, tf.concat(boundaries, 1, name="iteration_boundaries_output"+appendix), helper
     
     def embedding_module(self,
@@ -585,10 +586,11 @@ class HM_LSTM(MODEL):
             embeddings = tf.matmul(inputs,
                                    self.embedding_weights,
                                    name="concatenated_embeddings_in_embedding_module"+appendix)
-            return tf.split(embeddings,
+            split = tf.split(embeddings,
                             current_num_unrollings,
                             axis=0,
                             name="embedding_module_output"+appendix)
+            return split
     
     
     def RNN_module(self,
@@ -652,7 +654,11 @@ class HM_LSTM(MODEL):
                       "all_boundaries": tf.stack(saved_iteration_boundaries,
                                                  axis=1,
                                                  name="stack_of_boundaries"+appendix),
-                      "L2_norm_of_hidden_states": L2_norm}
+                      "L2_norm_of_hidden_states": L2_norm,
+                      "old_emb_idx": tf.stack([helper['old_emb_idx'] for helper in iteration_helpers],
+                                              name="old_emb_idx"+appendix),
+                      "slice_start": tf.stack([helper['slice_start'] for helper in iteration_helpers],
+                                              name="slice_start"+appendix)}
             return state, saved_hidden_states, helper
             
     
@@ -686,6 +692,117 @@ class HM_LSTM(MODEL):
                           self.output_bias,
                           name="logits"+appendix)
         
+        
+        
+    def construct_boundary_test_line(self):
+        test_line = list()
+        samples = [[0., 0.], [0., 1.], [1., 0.], [1., 1.]]
+        def add1(index):
+            test_line.append(list(samples[index]))
+        def add2(index):
+            test_line.append(list(samples[index]))
+            test_line.append(list(samples[index]))
+        add2(0)
+        add1(2)
+        add2(0)
+        add1(1)
+        add2(0)
+        add1(3)
+        add2(0)
+        add2(2)
+        add2(0)
+        add2(1)
+        add2(0)
+        add2(3)
+        add2(0)
+        add2(3)
+        add1(3)
+        add2(0)
+        add2(0)
+        return test_line
+    
+    def change_gate_chunk(self,
+                      layer_idx,
+                      gate_idx,
+                          coeff):
+        positive_coeffs = tf.constant(1., shape=[self._num_nodes[layer_idx]], name="positive_coeffs_operation_for_layer%s_gate%s"%(layer_idx, gate_idx))
+        other_coeffs = tf.constant(coeff, shape=[self._num_nodes[layer_idx]], name="other_coeffs_operation_for_layer%s_gate%s"%(layer_idx, gate_idx))
+        list_for_coeffs = list()
+        for _ in range(4):
+            list_for_coeffs.append(positive_coeffs)
+        list_for_coeffs[gate_idx] = other_coeffs
+        if layer_idx != self._num_layers-1:
+            list_for_coeffs.append(tf.constant(1., shape=[1], name="coeff_for_hard_sigm_operation_for_layer%s_gate%s"%(layer_idx, gate_idx)))
+        coeffs = tf.concat(list_for_coeffs, 0, name="coeffs_for_layer%s_gate%s"%(layer_idx, gate_idx))
+        modification_operation = tf.assign(self.Matrices[layer_idx],
+                                           tf.multiply(self.Matrices[layer_idx],
+                                                       coeffs,
+                                                       name="multiply_in_modification_operation_for_layer%s_gate%s"%(layer_idx, gate_idx)),
+                                           name="modification_operation_for_layer%s_gate%s"%(layer_idx, gate_idx))
+        return modification_operation
+    
+    def change_flow_chunk(self,
+                   layer_idx,
+                   direction,
+                    coeff):
+        list_of_coeffs = list()
+        
+        if layer_idx != self._num_layers - 1:
+            number_of_directions_on_layer = 3
+        else:
+            number_of_directions_on_layer = 2
+        for i in range(-1, number_of_directions_on_layer-1):
+            if i != direction:
+                current_coeff = 1.
+            else:
+                current_coeff = coeff
+            if not ((layer_idx == 0) and (i == -1)):
+                list_of_coeffs.append(tf.constant(current_coeff,
+                                                  shape=[self._num_nodes[layer_idx+i]],
+                                                  name="intermediate_coeffs_for_layer%s_direction%s"%(layer_idx, i)))
+            else:
+                print(i)
+                list_of_coeffs.append(tf.constant(current_coeff,
+                                                  shape=[self._embedding_size],
+                                                  name="intermediate_coeffs_for_layer%s_direction%s"%(layer_idx, i)))                
+        coeffs = tf.concat(list_of_coeffs,
+                               0,
+                               name="coeffs_for_layer%s_direction%s"%(layer_idx, direction))
+        modification_operation = tf.assign(self.Matrices[layer_idx],
+                                           tf.transpose(tf.multiply(tf.transpose(self.Matrices[layer_idx],
+                                                                                 name="transpose_in_modification_operation_for_layer%s_direction%s"%(layer_idx, direction)),
+                                                                    coeffs,
+                                                                    name="multiply_in_modification_operation_for_layer%s_direction%s"%(layer_idx, direction)),
+                                                        name="back_transpose_in_modification_operation_for_layer%s_direction%s"%(layer_idx, direction)),
+                                           name="modification_operation_for_layer%s_direction%s"%(layer_idx, direction))
+        return modification_operation        
+                
+    def modifify_matrices(self,
+                          gates_to_modify,
+                          directions_to_modify):
+        mod_ops = list()
+        if gates_to_modify is not None:
+            for gate in gates_to_modify:
+                mod_ops.append(self.change_gate_chunk(*gate))
+        if directions_to_modify is not None:
+            for direction in directions_to_modify:
+                mod_ops.append(self.change_flow_chunk(*direction))
+        if len(mod_ops) > 0:
+            return [tf.group(*mod_ops, name="final_operation")]
+        else:
+            return []
+    
+    def do_nothing(self,
+                   gates_to_modify,
+                   directions_to_modify):
+        mod_ops = list()
+        if gates_to_modify is not None:
+            for gate in gates_to_modify:
+                mod_ops.append(self.Matrices[gate[0]])
+        if directions_to_modify is not None:
+            for direction_to_modify in directions_to_modify:
+                mod_ops.append(self.Matrices[direction_to_modify[0]])
+        return tf.group(*mod_ops, name="empty_final_operation")
     
     def __init__(self,
                  batch_size,
@@ -699,7 +816,9 @@ class HM_LSTM(MODEL):
                  slope_half_life,
                  train_text,
                  valid_text,
-                 embedding_size=128):
+                 gates_to_modify=None,
+                 directions_to_modify=None,
+                 embedding_size=2):
         self._results = list()
         self._batch_size = batch_size
         self._vocabulary = vocabulary
@@ -734,13 +853,9 @@ class HM_LSTM(MODEL):
         with self._graph.as_default(): 
             with tf.name_scope('train'):
                 self._global_step = tf.Variable(0, name="global_step")
-                self.emb_idx = tf.Variable([0], name="emb_idx")
             with self._graph.device('/gpu:0'):
-                debug_boundaries = list()
-                for i in range(2):
-                    for j in range(2):
-                        debug_boundaries.append([float(i), float(j)])
-                self.debug_boundaries = tf.constant(debug_boundaries)
+                debug_boundaries = self.construct_boundary_test_line()
+                self.debug_boundaries = tf.constant(debug_boundaries, name="debug_boundaries")
                 # embedding module variables
                 self.embedding_weights = tf.Variable(tf.ones([self._vocabulary_size, self._embedding_size],
                                                              name="embeddings_matrix_initialize"),
@@ -803,6 +918,7 @@ class HM_LSTM(MODEL):
                 self.output_bias = tf.Variable(tf.zeros([self._vocabulary_size], name="output_bias_initializer"),
                                                trainable=False,
                                                name="output_bias")
+
                 
                 with tf.name_scope('train'):
                     """PLACEHOLDERS train data"""
@@ -880,71 +996,80 @@ class HM_LSTM(MODEL):
                     # appendix is used for constructing of tensor name. It is appended to tensor name
                     # to indicate to which part of graph operation belongs
                     appendix = "_train"
-                    state = saved_state
-                    embedded_inputs = self.embedding_module(train_inputs, appendix)
-                    state, hidden_states, train_helper = self.RNN_module(embedded_inputs, saved_state, appendix)
-                    logits = self.output_module(hidden_states, appendix)
+                    with tf.name_scope('matrix_modification'):
+                        mod_op = [tf.cond(tf.equal(self._global_step, 0, name="equal_in_mod_op_init"+appendix),
+                                              true_fn=lambda: self.modifify_matrices(gates_to_modify, directions_to_modify),
+                                              false_fn=lambda: self.do_nothing(gates_to_modify, directions_to_modify),
+                                              name="cond_in_mod_op_init"+appendix)]
+
+                    with tf.control_dependencies(mod_op):
+                        embedded_inputs = self.embedding_module(train_inputs, appendix)
+                        state, hidden_states, train_helper = self.RNN_module(embedded_inputs, saved_state, appendix)
+                        logits = self.output_module(hidden_states, appendix)
                     
-                    self.L2_train = tf.reshape(tf.slice(train_helper["L2_norm_of_hidden_states"],
+                        self.old_emb_idx = tf.reshape(train_helper['old_emb_idx'], [-1], name="old_emb_idx")
+                        self.slice_start = train_helper['slice_start']
+                    
+                        self.L2_train = tf.reshape(tf.slice(train_helper["L2_norm_of_hidden_states"],
                                                         [0, 0, 0],
                                                         [1, 10, 1],
                                                         name="slice_for_L2"+appendix),
                                                [-1],
                                                name="L2"+appendix)
 
-                    save_list = list()
-                    save_list_templ = "save_list_assign_layer%s_number%s"
-                    for i in range(self._num_layers-1):
-                        save_list.append(tf.assign(saved_state[i][0],
+                        self.save_list = list()
+                        save_list_templ = "save_list_assign_layer%s_number%s"
+                        for i in range(self._num_layers-1):
+                            self.save_list.append(tf.assign(saved_state[i][0],
                                                    state[i][0],
                                                    name=save_list_templ%(i, 0)))
-                        save_list.append(tf.assign(saved_state[i][1],
+                            self.save_list.append(tf.assign(saved_state[i][1],
                                                    state[i][1],
                                                    name=save_list_templ%(i, 1)))
-                        save_list.append(tf.assign(saved_state[i][2],
+                            self.save_list.append(tf.assign(saved_state[i][2],
                                                    state[i][2],
                                                    name=save_list_templ%(i, 2)))
-                    save_list.append(tf.assign(saved_state[-1][0],
+                        self.save_list.append(tf.assign(saved_state[-1][0],
                                                state[-1][0],
                                                name=save_list_templ%(self._num_layers-1, 0)))
-                    save_list.append(tf.assign(saved_state[-1][1],
+                        self.save_list.append(tf.assign(saved_state[-1][1],
                                                state[-1][1],
                                                name=save_list_templ%(self._num_layers-1, 1)))
 
-                    """skip operation"""
-                    self._skip_operation = tf.group(*save_list, name="skip_operation")
+                        """skip operation"""
+                        self._skip_operation = tf.group(*self.save_list, name="skip_operation")
 
-                    with tf.control_dependencies(save_list):
+                        with tf.control_dependencies(self.save_list):
                             # Classifier.
-                        """loss"""
-                        self._loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=tf.concat(train_labels,
+                            """loss"""
+                            self._loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=tf.concat(train_labels,
                                                                                                              0,
                                                                                                              name="train_labels_concat_for_cross_entropy"),
                                                                                             logits=logits,
                                                                                             name="cross_entropy"),
                                                     name="reduce_mean_for_loss_computation")
-                    # Optimizer.
+                        # Optimizer.
 
-                    # global variables initializer
-                    self.global_initializer = tf.global_variables_initializer()
+                        # global variables initializer
+                        self.global_initializer = tf.global_variables_initializer()
 
-                    """PLACEHOLDERS half life and decay"""
-                    self._half_life = tf.placeholder(tf.int32, name="half_life")
-                    self._decay = tf.placeholder(tf.float32, name="decay")
-                    """learning rate"""
-                    self._learning_rate = tf.train.exponential_decay(10.0,
+                        """PLACEHOLDERS half life and decay"""
+                        self._half_life = tf.placeholder(tf.int32, name="half_life")
+                        self._decay = tf.placeholder(tf.float32, name="decay")
+                        """learning rate"""
+                        self._learning_rate = tf.train.exponential_decay(10.0,
                                                                      self._global_step,
                                                                      self._half_life,
                                                                      self._decay,
                                                                      staircase=True,
                                                                      name="learning_rate")
-                    optimizer = tf.train.GradientDescentOptimizer(self._learning_rate)
-                    gradients, v = zip(*optimizer.compute_gradients(self._loss))
-                    gradients, _ = tf.clip_by_global_norm(gradients, 1.25)
-                    """optimizer"""
-                    self._optimizer = optimizer.apply_gradients(zip(gradients, v), global_step=self._global_step)
-                    """train prediction"""
-                    self._train_prediction = tf.nn.softmax(logits, name="train_prediction")
+                        optimizer = tf.train.GradientDescentOptimizer(self._learning_rate)
+                        gradients, v = zip(*optimizer.compute_gradients(self._loss))
+                        gradients, _ = tf.clip_by_global_norm(gradients, 1.25)
+                        """optimizer"""
+                        self._optimizer = optimizer.apply_gradients(zip(gradients, v), global_step=self._global_step)
+                        """train prediction"""
+                        self._train_prediction = tf.nn.softmax(logits, name="train_prediction")
 
                 # Sampling and validation eval: batch 1, no unrolling.
                 with tf.name_scope('validation'):
@@ -1113,9 +1238,6 @@ class HM_LSTM(MODEL):
             _ = self._sample_prediction.eval({self._sample_input: b[0]})
         return text_list, boundaries_list 
 
-# In[1]:
-
-
 
 model = HM_LSTM(1,
                  vocabulary,
@@ -1128,23 +1250,31 @@ model = HM_LSTM(1,
                  100,
                  train_text,
                  valid_text,
-                 embedding_size=4)
+                #gates_to_modify=[[0, 1, -1.]],
+                directions_to_modify=[[0, -1, 0.]],
+                embedding_size=6)
 
 
-# In[ ]:
 
-
+logdir = "HM_LSTM/logging/debug_summary_log"
+summary_dict={'summary_collection_frequency': 1,
+              'summary_tensors': 'self._global_step'}
 model.run(1,                # number of times learning_rate is decreased
           0.9,              # a factor by which learning_rate is decreased
-            200,            # each 'train_frequency' steps loss and percent correctly predicted letters is calculated
+            100,            # each 'train_frequency' steps loss and percent correctly predicted letters is calculated
             50,             # minimum number of times loss and percent correctly predicted letters are calculated while learning (train points)
             3,              # if during half total spent time loss decreased by less than 'stop_percent' percents learning process is stopped
             1,              # when train point is obtained validation may be performed
             20,             # when train point percent is calculated results got on averaging_number chunks are averaged
-          fixed_number_of_steps=20,
-           block_validation=True,
-           debug=True,
-           allow_soft_placement=True)
+          fixed_number_of_steps=35,
+            print_intermediate_results=True,
+            add_operations = ['self.save_list'],
+          print_steps=[i for i in range(30)],
+          block_validation=True,
+          summarizing_logdir=logdir,
+           debug=True)
+
+
 
 
 

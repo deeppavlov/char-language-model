@@ -110,6 +110,10 @@ class ComparePlots(object):
             return results[result_number]['metadata'][indices["type"]] + ("_%s" % results[result_number]['metadata'][indices["num_layers"]]) 
         elif results[result_number]['metadata'][indices["type"]] == 'adaptive_1_with_trigger':     
             return results[result_number]['metadata'][indices["type"]] + ("_%s" % results[result_number]['metadata'][indices["num_layers"]]) 
+        elif results[result_number]['metadata'][indices["type"]] == 'HM_LSTM':     
+            return results[result_number]['metadata'][indices["type"]] + ("_%s" % results[result_number]['metadata'][indices["num_layers"]]) 
+        elif results[result_number]['metadata'][indices["type"]] == 'HM_LSTM2':     
+            return results[result_number]['metadata'][indices["type"]] + ("_%s" % results[result_number]['metadata'][indices["num_layers"]]) 
         else:
             print("Unknown network type: %s" % results[result_number]['metadata'][indices["type"]])
             return 0
@@ -152,7 +156,7 @@ class ComparePlots(object):
             
     def _parse_one_variable(self, variable):
         digits = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
-        if isinstance(variable, basestring):
+        if isinstance(variable, str):
             if variable[-1] == ']':
                 [variable, index] = variable.split('[')
                 index = index[:len(index)-1]

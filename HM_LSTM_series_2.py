@@ -12,8 +12,6 @@ import math
 import random
 import string
 import tensorflow as tf
-import tensorflow.python.ops.rnn_cell 
-from tensorflow.python.framework import registry
 import zipfile
 from six.moves import range
 from six.moves.urllib.request import urlretrieve
@@ -44,6 +42,7 @@ from model_module import batches2string
 from model_module import logprob
 from model_module import sample_distribution
 from model_module import MODEL
+
 
 version = sys.version_info[0]
 
@@ -83,11 +82,7 @@ else:
     text = f.read().decode('utf8')
     f.close() 
     (not_one_byte_counter, min_character_order_index, max_character_order_index, number_of_characters, present_characters_indices) = check_not_one_byte(text)
-
-    print("number of not one byte characters: ", not_one_byte_counter) 
-    print("min order index: ", min_character_order_index)
-    print("max order index: ", max_character_order_index)
-    print("total number of characters: ", number_of_characters)    
+ 
 
 
 # In[3]:
@@ -102,12 +97,6 @@ valid_text_1 = text[offset_1:offset_1+valid_size_1]
 valid_text_2 = text[offset_2:offset_2+valid_size_2]
 train_text = text[offset_2+valid_size_2:]
 train_size = len(train_text)
-print(train_size, train_text[:64])
-print(valid_size_1, valid_text_1[:64])
-print(valid_size_2, valid_text_2[:64])
-print(valid_text_1)
-print('\n\n\n')
-print(valid_text_2)
 
 
 # In[4]:
@@ -115,12 +104,10 @@ print(valid_text_2)
 
 #different
 offset = 20000
-valid_size = 25000
+valid_size = 500
 valid_text = text[offset:offset+valid_size]
 train_text = text[offset+valid_size:]
 train_size = len(train_text)
-print(train_size, train_text[:64])
-print(valid_size, valid_text[:64])
 
 
 # In[5]:
@@ -146,16 +133,7 @@ for i in range(256):
 string_vocabulary = u""
 for i in range(vocabulary_size):
     string_vocabulary += vocabulary[i]
-print("Vocabulary: ", string_vocabulary)
-print("char2id(u'a') = %s,  char2id(u'z') = %s,  char2id(u' ') = %s" % (char2id(u'a', characters_positions_in_vocabulary),
-                                                                        char2id(u'z', characters_positions_in_vocabulary),
-                                                                        char2id(u' ', characters_positions_in_vocabulary)))
-print("id2char(78) = %s,  id2char(156) = %s,  id2char(140) = %s" % (id2char(78,
-                                                                            vocabulary),
-                                                                    id2char(156,
-                                                                            vocabulary),
-                                                                    id2char(140,
-                                                                            vocabulary)))
+
 
 
 # In[6]:
@@ -174,11 +152,6 @@ valid_batches_test = BatchGenerator(valid_text_1,
                                     vocabulary_size,
                                     characters_positions_in_vocabulary,
                                     1)
-
-print(batches2string(train_batches_test.next(), vocabulary))
-print(batches2string(train_batches_test.next(), vocabulary))
-print(batches2string(valid_batches_test.next(), vocabulary))
-print(batches2string(valid_batches_test.next(), vocabulary))
 
 
 # In[7]:
@@ -476,7 +449,7 @@ class HM_LSTM(MODEL):
                                X):
         # Elementwise calculates step function 
         # During backward pass works as hard sigm
-        with self._graph.gradient_override_map({"Sign": "HardSigmoid"}):
+        with self._graph.gradient_override_map({"Sign": self.gradient_name}):
             X = tf.sign(X, name="sign_func_in_compute_boundary")
         """X = tf.sign(X)"""
         X = tf.divide(tf.add(X,
@@ -661,6 +634,16 @@ class HM_LSTM(MODEL):
                                     name="matmul_in_logits"),
                           self.output_bias,
                           name="logits")
+        
+    def compute_perplexity(self, probabilities):
+        with tf.name_scope('perplexity'):
+            ln2 = tf.log(2., name="ln2")
+            log_probabilities = tf.divide(tf.log(probabilities, name="log_in_compute_probability"), ln2, name="log_probabilities")
+            neg_probabilities = tf.negative(probabilities, name="negative_in_compute_probability")
+            multiply = tf.multiply(neg_probabilities, log_probabilities, name="multiply_in_compute_probability")
+            entropy = tf.reduce_sum(multiply, axis=1, name="entropy")
+            perplexity = tf.exp(tf.multiply(ln2, entropy, name="multiply_in_perplexity"), name="perplexity")
+            return tf.reduce_mean(perplexity, name="mean_perplexity")
             
         
     
@@ -678,7 +661,11 @@ class HM_LSTM(MODEL):
                  valid_text,
                  embedding_size=128,
                  output_embedding_size=1024,
-                 init_parameter=1.):
+                 init_parameter=1.,               # init_parameter is used for balancing stddev in matrices initialization
+                                                  # and initial learning rate
+                 matr_init_parameter=1000.,
+                 override_appendix=''):               
+                                                   
         self._results = list()
         self._batch_size = batch_size
         self._vocabulary = vocabulary
@@ -696,6 +683,8 @@ class HM_LSTM(MODEL):
         self._embedding_size = embedding_size
         self._output_embedding_size = output_embedding_size
         self._init_parameter = init_parameter
+        self._matr_init_parameter = matr_init_parameter
+        self.gradient_name = 'HardSigmoid' + override_appendix
         self._indices = {"batch_size": 0,
                          "num_unrollings": 1,
                          "num_layers": 2,
@@ -710,7 +699,8 @@ class HM_LSTM(MODEL):
                          "embedding_size": 11,
                          "output_embedding_size": 12,
                          "init_parameter": 13,
-                         "type": 14}
+                         "matr_init_parameter": 14,
+                         "type": 15}
         self._graph = tf.Graph()
         
         self._last_num_steps = 0
@@ -720,7 +710,7 @@ class HM_LSTM(MODEL):
             with self._graph.device('/gpu:0'):
                 # embedding module variables
                 self.embedding_weights = tf.Variable(tf.truncated_normal([self._vocabulary_size, self._embedding_size],
-                                                                         stddev = math.sqrt(self._init_parameter*1000/self._vocabulary_size),
+                                                                         stddev = math.sqrt(self._init_parameter*matr_init_parameter/self._vocabulary_size),
                                                                          name="embeddings_matrix_initialize"), 
                                                      name="embeddings_matrix_variable")
                 
@@ -737,7 +727,7 @@ class HM_LSTM(MODEL):
                 self.Matrices.append(tf.Variable(tf.truncated_normal([self._embedding_size + self._num_nodes[0] + self._num_nodes[1],
                                                                       4 * self._num_nodes[0] + 1],
                                                                      mean=0.,
-                                                                     stddev=math.sqrt(self._init_parameter*1000/(self._embedding_size+self._num_nodes[0]+self._num_nodes[1])),
+                                                                     stddev=math.sqrt(self._init_parameter*matr_init_parameter/(self._embedding_size+self._num_nodes[0]+self._num_nodes[1])),
                                                                      name=init_matr_name%0),
                                                  name=matr_name%0))
                 self.Biases.append(tf.Variable(tf.zeros([4 * self._num_nodes[0] + 1],
@@ -748,7 +738,7 @@ class HM_LSTM(MODEL):
                         self.Matrices.append(tf.Variable(tf.truncated_normal([self._num_nodes[i] + self._num_nodes[i+1] + self._num_nodes[i+2],
                                                                               4 * self._num_nodes[i+1] + 1],
                                                                              mean=0.,
-                                                                             stddev=math.sqrt(self._init_parameter*1000/(self._num_nodes[i]+self._num_nodes[i+1]+self._num_nodes[i+2])),
+                                                                             stddev=math.sqrt(self._init_parameter*matr_init_parameter/(self._num_nodes[i]+self._num_nodes[i+1]+self._num_nodes[i+2])),
                                                                              name=init_matr_name%(i+1)),
                                                          name=matr_name%(i+1)))
                         self.Biases.append(tf.Variable(tf.zeros([4 * self._num_nodes[i+1] + 1],
@@ -757,7 +747,7 @@ class HM_LSTM(MODEL):
                 self.Matrices.append(tf.Variable(tf.truncated_normal([self._num_nodes[-1] + self._num_nodes[-2],
                                                                       4 * self._num_nodes[-1]],
                                                                      mean=0.,
-                                                                     stddev=math.sqrt(self._init_parameter*1000/(self._num_nodes[-1]+self._num_nodes[-2])),
+                                                                     stddev=math.sqrt(self._init_parameter*matr_init_parameter/(self._num_nodes[-1]+self._num_nodes[-2])),
                                                                      name=init_matr_name%(self._num_layers-1)),
                                                  name=matr_name%(self._num_layers-1)))     
                 self.Biases.append(tf.Variable(tf.zeros([4 * self._num_nodes[-1]],
@@ -769,18 +759,18 @@ class HM_LSTM(MODEL):
                 # output module variables
                 # output module gates weights (w^l vectors in (formula (11)))
                 self.output_module_gates_weights = tf.Variable(tf.truncated_normal([dim_classifier_input, self._num_layers],
-                                                                                   stddev = math.sqrt(self._init_parameter*1000/dim_classifier_input),
+                                                                                   stddev = math.sqrt(self._init_parameter*matr_init_parameter/dim_classifier_input),
                                                                                    name="output_gates_weights_initializer"),
                                                                name="output_gates_weights")
                 # classifier 
                 self.output_embedding_weights = tf.Variable(tf.truncated_normal([dim_classifier_input, self._output_embedding_size],
-                                                                                stddev=math.sqrt(self._init_parameter*1000/dim_classifier_input),
+                                                                                stddev=math.sqrt(self._init_parameter*matr_init_parameter/dim_classifier_input),
                                                                                 name="output_embedding_weights_initializer"),
                                                             name="output_embedding_weights")
                 self.output_embedding_bias = tf.Variable(tf.zeros([self._output_embedding_size], name="output_bias_initializer"),
                                                          name="output_bias")
                 self.output_weights = tf.Variable(tf.truncated_normal([self._output_embedding_size, self._vocabulary_size],
-                                                                      stddev = math.sqrt(self._init_parameter*1000/self._output_embedding_size),
+                                                                      stddev = math.sqrt(self._init_parameter*matr_init_parameter/self._output_embedding_size),
                                                                       name="output_weights_initializer"),
                                                   name="output_weights")
                 self.output_bias = tf.Variable(tf.zeros([self._vocabulary_size], name="output_bias_initializer"),
@@ -836,8 +826,8 @@ class HM_LSTM(MODEL):
                                                                                 name="slope_half_life_const")),
                                                name="to_float_in_slope_init") * tf.constant(self._slope_growth, name="slope_growth"),
                                    name="slope")
-
-                    @tf.RegisterGradient("HardSigmoid")
+                    
+                    @tf.RegisterGradient(self.gradient_name)
                     def hard_sigm_grad(op,                # op is operation for which gradient is computed
                                        grad):             # loss partial gradients with respect to op outputs
                         # This function is added for implememting straight-through estimator as described in
@@ -937,6 +927,11 @@ class HM_LSTM(MODEL):
                     self._optimizer = optimizer.apply_gradients(zip(gradients, v), global_step=self._global_step)
                     """train prediction"""
                     self._train_prediction = tf.nn.softmax(logits, name="train_prediction")
+                    log_train_prediction = tf.divide(tf.log(self._train_prediction,
+                                                            name="log_in_log_train_prediction"),
+                                                     math.log(2),
+                                                     name="log_train_prediction")
+                    self.train_perplexity = self.compute_perplexity(self._train_prediction)
                     
 
                 # Sampling and validation eval: batch 1, no unrolling.
@@ -1035,9 +1030,23 @@ class HM_LSTM(MODEL):
                         self.L2_hidden_states_validation = tf.reshape(validation_helper["L2_norm_of_hidden_states"], [-1], name="L2_hidden_validation")
                         self.boundary = tf.reshape(validation_helper["all_boundaries"], [-1], name="sample_boundary")
                         self.sigm_arg = tf.reshape(validation_helper["hard_sigm_arg"], [-1], name="sample_sigm_arg")
+                        self.validation_perplexity = self.compute_perplexity(self._sample_prediction)
 
             """saver"""
             self.saver = tf.train.Saver(max_to_keep=None)
+            
+    def reinit(self,
+               init_slope,
+               slope_growth,
+               slope_half_life,
+               init_parameter,               # init_parameter is used for balancing stddev in matrices initialization
+                                                  # and initial learning rate
+               matr_init_parameter):
+        self._init_slope = init_slope
+        self._slope_half_life = slope_half_life
+        self._slope_growth = slope_growth
+        self._init_parameter = init_parameter
+        self._matr_init_parameter = matr_init_parameter
                            
                         
     
@@ -1057,6 +1066,7 @@ class HM_LSTM(MODEL):
         metadata.append(self._embedding_size)
         metadata.append(self._output_embedding_size)
         metadata.append(self._init_parameter)
+        metadata.append(self._matr_init_parameter)
         metadata.append('HM_LSTM')
         return metadata
   
@@ -1102,48 +1112,65 @@ class HM_LSTM(MODEL):
                     text_list.append(text)
                     letters_parsed = -1
                     
-            _ = self._sample_prediction.eval({self._sample_input: b[0]})
-        return text_list, boundaries_list  
+            else:        
+                _ = self._sample_prediction.eval({self._sample_input: b[0]})
+        return text_list, boundaries_list 
 
 
 
-
-model = HM_LSTM(53,
-                 vocabulary,
-                 characters_positions_in_vocabulary,
-                 100,
-                 3,
-                 [256, 256, 256],
-                 .1,               # init_slope
-                 0.2,                  # slope_growth
-                 1000,
-                 train_text,
-                 valid_text)
-
-name_of_run = 'tenth'
-text_list, boundary_list = model.run_for_analitics(model.get_boundaries,
-                                                'peganov/HM_LSTM/'+name_of_run+'/variables',
+init_parameter_value = 1e-6
+matr_init_parameter_value = 100000
+num_nodes = 128
+init_slope = .5
+slope_growth = .5
+slope_half_life = 1000
+results_GL = list()
+run_idx = 0
+folder_name = 'repeated_nn%sis%ssg%sshl%s' % (num_nodes, init_slope, slope_growth, slope_half_life)
+name_of_run_template = 'ip%s_imp%s' % (init_parameter_value, matr_init_parameter_value) +'#%s'
+for i in range(1):
+    name_of_run = name_of_run_template % i
+    model = HM_LSTM(64,
+                                 vocabulary,
+                                 characters_positions_in_vocabulary,
+                                 30,
+                                 3,
+                                 [num_nodes, num_nodes, num_nodes],
+                                 init_slope,
+                                 slope_growth,
+                                  slope_half_life,
+                                 train_text,
+                                 valid_text,
+                        init_parameter=init_parameter_value,
+                        matr_init_parameter=matr_init_parameter_value,
+                        override_appendix=str(run_idx))
+    model.simple_run(100,                # number of percents values used for final averaging
+                         'peganov/HM_LSTM/'+ folder_name +'/'+name_of_run+'/variables',
+                         100,              # minimum number of learning iterations
+                         20000,              # period of checking loss function. It is used defining if learning should be stopped
+                         20000,              # learning has a chance to be stopped after every block of steps
+                         10,                 # number of times 'learning_rate' is multiplied on 'decay'
+                         .8,                 # a factor by which the learning rate decreases each 'half_life'
+                         3,                  # if fixed_num_steps=False this parameter defines when the learning process should be stopped. If during half the total learning time loss function decreased less than by 'stop_percent' percents the learning would be stopped
+                         fixed_num_steps=True)
+    text_list, boundary_list = model.run_for_analitics(model.get_boundaries,
+                                                'peganov/HM_LSTM/'+ folder_name +'/'+name_of_run+'/variables',
                                                 [10, 75, None])
-
-for i in range(10):
-    text_boundaries_plot(text_list[i],
-                    boundary_list[i],
-                    'boundaries by layer',
-                    ['peganov', 'HM_LSTM', name_of_run, 'plots'],
-                    name_of_run+'#%s' % i,
-                    show=False)
-
-
-
-
-model.get_result('peganov/HM_LSTM/'+name_of_run+'/variables',
-                   100,
-                   40000,
-                   20,
-                   0.9)
-folder_name = 'peganov/HM_LSTM/'+name_of_run
-file_name = name_of_run+'.pickle'
-results_GL = model._results
+    for i in range(4):
+        text_boundaries_plot(text_list[i],
+                            boundary_list[i],
+                            'boundaries by layer',
+                            ['peganov', 'HM_LSTM', folder_name, name_of_run, 'plots'],
+                            name_of_run+'plot#%s' % i,
+                            show=False)
+    results_GL.append(model._results[-1])
+    run_idx += 1
+    model.destroy()
+    del model
+    gc.collect()
+pickle_file_name = folder_name
+folder_name = 'peganov/HM_LSTM/'+pickle_file_name
+file_name = pickle_file_name+'.pickle'
 pickle_dump = {'results_GL': results_GL}
 if not os.path.exists(folder_name):
     try:
@@ -1156,5 +1183,6 @@ try:
         pickle.dump(pickle_dump, f, pickle.HIGHEST_PROTOCOL)
 except Exception as e:
     print('Unable to save data to', file_name, ':', e)
+
 
 

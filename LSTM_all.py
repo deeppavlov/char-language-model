@@ -103,7 +103,7 @@ train_size = len(train_text)
 
 #different
 offset = 20000
-valid_size = 25000
+valid_size = 500
 valid_text = text[offset:offset+valid_size]
 train_text = text[offset+valid_size:]
 train_size = len(train_text)
@@ -298,9 +298,15 @@ class LSTM(MODEL):
                                                          0,
                                                          name="concat_in_gated_hidden_states"),
                                                name="gated_hidden_states")
-            return tf.add(tf.matmul(gated_hidden_states,
+            output_embeddings = tf.nn.relu(tf.add(tf.matmul(gated_hidden_states,
+                                                            self.output_embedding_weights,
+                                                            name="matmul_in_output_embeddings"),
+                                                  self.output_embedding_bias,
+                                                  name="xW_plus_b_in_output_embeddings"),
+                                           name="output_embeddings")
+            return tf.add(tf.matmul(output_embeddings,
                                     self.output_weights,
-                                    name="matmul_in_logits_output"),
+                                    name="matmul_in_logits"),
                           self.output_bias,
                           name="logits")
         
@@ -314,7 +320,12 @@ class LSTM(MODEL):
                  num_nodes,
                  train_text,
                  valid_text,
-                 embedding_size=128):
+                 embedding_size=128,
+                 output_embedding_size=1024,
+                 init_parameter=1.,               # init_parameter is used for balancing stddev in matrices initialization
+                                                  # and initial learning rate
+                 matr_init_parameter=1000.,
+                 override_appendix=''):
         self._results = list()
         self._batch_size = batch_size
         self._vocabulary = vocabulary
@@ -327,6 +338,9 @@ class LSTM(MODEL):
         self._valid_text = valid_text
         self._valid_size = len(valid_text)
         self._embedding_size = embedding_size
+        self._output_embedding_size = output_embedding_size
+        self._init_parameter = init_parameter
+        self._matr_init_parameter = matr_init_parameter
         self._indices = {"batch_size": 0,
                          "num_unrollings": 1,
                          "num_layers": 2,
@@ -334,8 +348,11 @@ class LSTM(MODEL):
                          "half_life": 4,
                          "decay": 5,
                          "num_steps": 6,
-                         "averaging_number": 7,
-                         "embedding_size": 11,
+                         "averaging_number":7,
+                         "embedding_size": 8,
+                         "output_embedding_size": 9,
+                         "init_parameter": 10,
+                         "matr_init_parameter": 11,
                          "type": 12}
         self._graph = tf.Graph()
         
@@ -346,7 +363,7 @@ class LSTM(MODEL):
             with self._graph.device('/gpu:0'):
                 # embedding module variables
                 self.embedding_weights = tf.Variable(tf.truncated_normal([self._vocabulary_size, self._embedding_size],
-                                                                         stddev = math.sqrt(1./self._vocabulary_size),
+                                                                         stddev = math.sqrt(self._init_parameter*matr_init_parameter/self._vocabulary_size),
                                                                          name="embeddings_matrix_initialize"), 
                                                      name="embeddings_matrix_variable")
                 
@@ -363,7 +380,7 @@ class LSTM(MODEL):
                 self.Matrices.append(tf.Variable(tf.truncated_normal([self._embedding_size + self._num_nodes[0],
                                                                       4 * self._num_nodes[0]],
                                                                      mean=0.,
-                                                                     stddev=math.sqrt(1./(self._embedding_size+self._num_nodes[0])),
+                                                                     stddev=math.sqrt(self._init_parameter*matr_init_parameter/(self._embedding_size+self._num_nodes[0])),
                                                                      name=init_matr_name%0),
                                                  name=matr_name%0))
                 self.Biases.append(tf.Variable(tf.zeros([4 * self._num_nodes[0]],
@@ -374,7 +391,7 @@ class LSTM(MODEL):
                         self.Matrices.append(tf.Variable(tf.truncated_normal([self._num_nodes[i] + self._num_nodes[i+1],
                                                                               4 * self._num_nodes[i+1]],
                                                                              mean=0.,
-                                                                             stddev=math.sqrt(1./(self._num_nodes[i]+self._num_nodes[i+1])),
+                                                                             stddev=math.sqrt(self._init_parameter*matr_init_parameter/(self._num_nodes[i]+self._num_nodes[i+1])),
                                                                              name=init_matr_name%(i+1)),
                                                          name=matr_name%(i+1)))
                         self.Biases.append(tf.Variable(tf.zeros([4 * self._num_nodes[i+1]],
@@ -386,12 +403,18 @@ class LSTM(MODEL):
                 # output module variables
                 # output module gates weights (w^l vectors in (formula (11)))
                 self.output_module_gates_weights = tf.Variable(tf.truncated_normal([dim_classifier_input, self._num_layers],
-                                                                                   stddev = math.sqrt(1./dim_classifier_input),
+                                                                                   stddev = math.sqrt(self._init_parameter*matr_init_parameter/dim_classifier_input),
                                                                                    name="output_gates_weights_initializer"),
                                                                name="output_gates_weights")
                 # classifier 
-                self.output_weights = tf.Variable(tf.truncated_normal([dim_classifier_input, self._vocabulary_size],
-                                                                      stddev = math.sqrt(1./dim_classifier_input),
+                self.output_embedding_weights = tf.Variable(tf.truncated_normal([dim_classifier_input, self._output_embedding_size],
+                                                                                stddev=math.sqrt(self._init_parameter*matr_init_parameter/dim_classifier_input),
+                                                                                name="output_embedding_weights_initializer"),
+                                                            name="output_embedding_weights")
+                self.output_embedding_bias = tf.Variable(tf.zeros([self._output_embedding_size], name="output_bias_initializer"),
+                                                         name="output_bias")
+                self.output_weights = tf.Variable(tf.truncated_normal([self._output_embedding_size, self._vocabulary_size],
+                                                                      stddev = math.sqrt(self._init_parameter*matr_init_parameter/self._output_embedding_size),
                                                                       name="output_weights_initializer"),
                                                   name="output_weights")
                 self.output_bias = tf.Variable(tf.zeros([self._vocabulary_size], name="output_bias_initializer"),
@@ -469,20 +492,21 @@ class LSTM(MODEL):
                     # It is used for defining initial learning rate
                     dimensions = list()
                     dimensions.append(self._vocabulary_size)
-                    dimensions.append(self._embedding_size + self._num_nodes[0] + self._num_nodes[1])
-                    if self._num_layers > 2:
-                        for i in range(self._num_layers-2):
-                            dimensions.append(self._num_nodes[i] + self._num_nodes[i+1] + self._num_nodes[i+2])
+                    dimensions.append(self._embedding_size + self._num_nodes[0])
+                    if self._num_layers > 1:
+                        for i in range(self._num_layers-1):
+                            dimensions.append(self._num_nodes[i] + self._num_nodes[i+1])
                     dimensions.append(sum(self._num_nodes))
                     max_dimension = max(dimensions)
                     
-                    self._learning_rate = tf.train.exponential_decay(160./math.sqrt(max_dimension),
+                    self._learning_rate = tf.train.exponential_decay(160.*math.sqrt(self._init_parameter/max_dimension),
                                                                      self._global_step,
                                                                      self._half_life,
                                                                      self._decay,
                                                                      staircase=True,
                                                                      name="learning_rate")
-                    optimizer = tf.train.GradientDescentOptimizer(self._learning_rate)
+                    #optimizer = tf.train.GradientDescentOptimizer(self._learning_rate)
+                    optimizer = tf.train.AdamOptimizer(learning_rate=self._learning_rate)
                     gradients, v = zip(*optimizer.compute_gradients(self._loss))
                     gradients, _ = tf.clip_by_global_norm(gradients, 1.25)
                     """optimizer"""
@@ -561,10 +585,10 @@ class LSTM(MODEL):
         metadata.append(decay)
         metadata.append(self._last_num_steps)
         metadata.append(num_averaging_iterations)
-        metadata.append(self._init_slope)
-        metadata.append(self._slope_growth)
-        metadata.append(self._slope_half_life)
         metadata.append(self._embedding_size)
+        metadata.append(self._output_embedding_size)
+        metadata.append(self._init_parameter)
+        metadata.append(self._matr_init_parameter)
         metadata.append('HM_LSTM')
         return metadata
   
@@ -612,25 +636,45 @@ class LSTM(MODEL):
             _ = self._sample_prediction.eval({self._sample_input: b[0]})
         return text_list, boundaries_list 
 
+init_parameter_value = 1e-6
+matr_init_parameter_value = 100000
 
-
-model = HM_LSTM(53,
+model = LSTM(53,
                  vocabulary,
                  characters_positions_in_vocabulary,
-                 100,
-                 3,
-                 [512, 512, 512],
+                 30,
+                 1,
+                 [512],
                  train_text,
-                 valid_text)
+                 valid_text,
+                        init_parameter=init_parameter_value,
+                        matr_init_parameter=matr_init_parameter_value)
 
-model.run(20,                # number of times learning_rate is decreased
-          0.9,              # a factor by which learning_rate is decreased
-            1000,            # each 'train_frequency' steps loss and percent correctly predicted letters is calculated
-            100,             # minimum number of times loss and percent correctly predicted letters are calculated while learning (train points)
-            3,              # if during half total spent time loss decreased by less than 'stop_percent' percents learning process is stopped
-            1,              # when train point is obtained validation may be performed
-            20,             # when train point percent is calculated results got on averaging_number chunks are averaged
-          fixed_number_of_steps=100000,
-            print_intermediate_results = True,
-          save_path="peganov/LSTM_all/first/variables")
+model.simple_run(100,                # number of percents values used for final averaging
+                         'peganov/LSTM_all/ns10000nl1nn512nu30hl1000dc0.8/variables',
+                         100,              # minimum number of learning iterations
+                         20000,              # period of checking loss function. It is used defining if learning should be stopped
+                         20000,              # learning has a chance to be stopped after every block of steps
+                         10,                 # number of times 'learning_rate' is multiplied on 'decay'
+                         .8,                 # a factor by which the learning rate decreases each 'half_life'
+                         3,                  # if fixed_num_steps=False this parameter defines when the learning process should be stopped. If during half the total learning time loss function decreased less than by 'stop_percent' percents the learning would be stopped
+                         fixed_num_steps=True)
+
+results_GL = model._results
+file_name = 'ns10000nl1nn512nu30hl1000dc0.8.pickle'
+folder_name = 'peganov/LSTM_all/ns10000nl1nn512nu30hl1000dc0.8'
+pickle_dump = {'results_GL': results_GL}
+if not os.path.exists(folder_name):
+    try:
+        os.makedirs(folder_name)
+    except Exception as e:
+        print("Unable create folder '%s'" % folder_name, ':', e)    
+print('Pickling %s.' % (folder_name + '/' + file_name))
+try:
+    with open(folder_name + '/' + file_name, 'wb') as f:
+        pickle.dump(pickle_dump, f, pickle.HIGHEST_PROTOCOL)
+except Exception as e:
+    print('Unable to save data to', file_name, ':', e)
+
+
 

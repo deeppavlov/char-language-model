@@ -193,21 +193,25 @@ def percent_of_correct_predictions(predictions, labels):
     return float(num_correct) / num_characters * 100
 
 def compute_perplexity(probabilities):
+    probabilities[probabilities < 1e-10] = 1e-10
     log_probs = np.log2(probabilities)
     entropy_by_character = np.sum(- probabilities * log_probs, axis=1)
-    return np.exp2(np.mean(entropy_by_character))
+    return np.mean(np.exp2(entropy_by_character))
 
 # bits per character
 def compute_BPC(predictions, labels):
+    predictions[predictions < 1e-10] = 1e-10
     log_predictions = np.log2(predictions)
     BPC_by_character = np.sum(- labels * log_predictions, axis=1)
     return np.mean(BPC_by_character)
 
 def compute_BPC_and_perplexity(predictions, labels):
+    predictions[predictions < 1e-10] = 1e-10
     log_predictions = np.log2(predictions)
     entropy_by_character = np.sum(- predictions * log_predictions, axis=1)
+    perplexity_by_character = np.exp2(entropy_by_character)
     BPC_by_character = np.sum(- labels * log_predictions, axis=1)
-    return np.mean(BPC_by_character), np.exp2(np.mean(entropy_by_character))
+    return np.mean(BPC_by_character), np.mean(perplexity_by_character)
 
 class MODEL(object):
     _train_batches = None
@@ -299,13 +303,13 @@ class MODEL(object):
                               session,
                               num_averaging_iterations):
         if not isinstance(self._valid_text, dict):
-            data_for_plot = {'train': {'step': list(), 'percentage': list()},
-                             'validation': {'step': list(), 'percentage': list()}}
+            data_for_plot = {'train': {'step': list(), 'percentage': list(), 'BPC': list(), 'perplexity': list()},
+                             'validation': {'step': list(), 'percentage': list(), 'BPC': list(), 'perplexity': list()}}
         else:
             keys = self._valid_text.keys()
-            data_for_plot = {'train': {'step': list(), 'percentage': list()}} 
+            data_for_plot = {'train': {'step': list(), 'percentage': list(), 'BPC': list(), 'perplexity': list()}} 
             for key in keys:
-                data_for_plot[key] = {'step': list(), 'percentage': list()}           
+                data_for_plot[key] = {'step': list(), 'percentage': list(), 'BPC': list(), 'perplexity': list()}           
         
         for key in data_for_plot.keys():
             data_for_plot[key]['step'].append(-1)
@@ -327,6 +331,8 @@ class MODEL(object):
                                                               1)                    
         
         average_percentage_of_correct = 0.
+        average_BPC = 0
+        average_perplexity = 0
         for _ in range(num_averaging_iterations):
             for _ in range(self.SKIP_LENGTH // self._num_unrollings):
                 batches = self._train_batches.next()
@@ -341,31 +347,55 @@ class MODEL(object):
             predictions = session.run(self._train_prediction, feed_dict=feed_dict)
             labels = np.concatenate(list(batches)[1:])
             average_percentage_of_correct += percent_of_correct_predictions(predictions, labels) 
+            average_BPC += compute_BPC(predictions, labels)
+            average_perplexity += compute_perplexity(predictions)
         average_percentage_of_correct /= num_averaging_iterations
+        average_BPC /= num_averaging_iterations 
+        average_perplexity /= num_averaging_iterations
         
         self._reset_sample_state.run()
         
         if not isinstance(self._valid_size, dict): 
             validation_percentage_of_correct = 0.
+            validation_BPC = 0.
+            validation_perplexity = 0.
             for _ in range(self._valid_size):
                 b = self._valid_batches.next()
                 predictions = self._sample_prediction.eval({self._sample_input: b[0]})
                 validation_percentage_of_correct += percent_of_correct_predictions(predictions, b[1])
+                current_BPC, current_perplexity = compute_BPC_and_perplexity(predictions, b[1])
+                validation_BPC += current_BPC
+                validation_perplexity += current_perplexity
             validation_percentage_of_correct /= self._valid_size
+            validation_BPC /= self._valid_size
+            validation_perplexity /= self._valid_size
             data_for_plot['validation']['percentage'].append(validation_percentage_of_correct)
+            data_for_plot['validation']['BPC'].append(validation_BPC)
+            data_for_plot['validation']['perplexity'].append(validation_perplexity)
         else:
             keys = self._valid_size.keys()
             validation_percentage_of_correct = dict([zipped for zipped in zip(keys, [0. for _ in keys])])
+            validation_perplexity = dict([zipped for zipped in zip(keys, [0. for _ in keys])])
+            validation_BPC = dict([zipped for zipped in zip(keys, [0. for _ in keys])])
             for key in keys:
                 for _ in range(self._valid_size[key]):
                     b = self._valid_batches[key].next()
                     predictions = self._sample_prediction.eval({self._sample_input: b[0]})
                     validation_percentage_of_correct[key] += percent_of_correct_predictions(predictions, b[1])
+                    current_BPC, current_perplexity = compute_BPC_and_perplexity(predictions, b[1])
+                    validation_BPC[key] += current_BPC
+                    validation_perplexity[key] += current_perplexity
                 validation_percentage_of_correct[key] /= self._valid_size[key]
-                data_for_plot[key]['percentage'].append(validation_percentage_of_correct)
+                validation_perplexity[key] /= self._valid_size[key]
+                validation_BPC[key] /= self._valid_size[key]
+                data_for_plot[key]['percentage'].append(validation_percentage_of_correct[key])
+                data_for_plot[key]['perplexity'].append(validation_perplexity[key])
+                data_for_plot[key]['BPC'].append(validation_BPC[key])
         
         
         data_for_plot['train']['percentage'].append(average_percentage_of_correct)
+        data_for_plot['train']['perplexity'].append(average_perplexity)
+        data_for_plot['train']['BPC'].append(average_BPC)
         
         return data_for_plot
 
@@ -448,7 +478,36 @@ class MODEL(object):
               run_result["data"]["train"]["percentage"][-1],
               run_result["time"],
               lr))
-              
+
+    def pickle(self,
+               path,
+               name,
+               dictionary):
+        if not path == '':
+            if not os.path.exists(path):
+                try:
+                    os.makedirs(path)
+                except Exception as e:
+                    print("Unable create folder '%s'" % path, ':', e) 
+        if path == '': 
+            print('Pickling %s' % name)
+        else:
+            print('Pickling %s' % (path + '/' + name))
+        try:
+            if path == '': 
+                with open(name, 'wb') as f:
+                    pickle.dump(dictionary, f, pickle.HIGHEST_PROTOCOL)
+            else:
+                with open(path + '/' + name, 'wb') as f:
+                    pickle.dump(dictionary, f, pickle.HIGHEST_PROTOCOL)
+        except Exception as e:
+            print('Unable to save data to', name, ':', e)  
+
+    def split_to_path_name(self, path):
+        parts = path.split('/')
+        name = parts[-1]
+        path = '/'.join(parts[:-1])
+        return path, name            
         
         
     def run(self,
@@ -476,6 +535,9 @@ class MODEL(object):
             log_device_placement=False,                       # passed to tf.ConfigProto
             save_path=None,                                   # path to file which will be used for saving graph. If path does not exist it will be created
             path_to_file_for_saving_prints=None,              # path to file where everything apointed for printing is saved
+            collection_operations=None,
+            collection_steps=None,
+            path_to_file_for_saving_collection=None,          # all add operations results will be added to a dictionary which will pickled
             summarizing_logdir=None,                          # 'summarizing_logdir' is a path to directory for storing summaries
             summary_dict=None):                               # a dictionary containing 'summaries_collection_frequency', 'summary_tensors' 
                                                               # every 'summaries_collection_frequency'-th step summary is collected 
@@ -616,6 +678,34 @@ class MODEL(object):
                 train_operations_map.append(pointer)
                 for tensor_name in summary_dict['summary_tensors']:
                     exec('train_operations.append(%s)' % tensor_name)
+            else:
+                train_operations_map.append(None)
+                train_operations_map.append(None)
+
+            real_to_print_collection = list()
+            if collection_operations is not None:
+                collection_dictionary = {'step': list()}
+                for collection_operation in collection_operations:
+                    collection_dictionary[collection_operation] = list()
+                    exec('real_to_print_collection.append(%s)' % collection_operation)
+            else:
+                train_operations_map.append(None)
+                train_operations_map.append(None)
+            if collection_operations is not None:
+                train_operations_map.append(pointer)
+                for real_collection_operation in real_to_print_collection:
+                    if isinstance(real_collection_operation, list) or isinstance(real_collection_operation, tuple):
+                        if isinstance(real_collection_operation[0], list) or isinstance(real_collection_operation[0], tuple):
+                            for inner_list in real_collection_operation:
+                                pointer += len(inner_list)
+                                train_operations.extend(inner_list)
+                        else:
+                            pointer += len(real_collection_operation)
+                            train_operations.extend(real_collection_operation)
+                    else:
+                        pointer += 1
+                        train_operations.append(real_collection_operation)
+                train_operations_map.append(pointer)
 
             def fixed_logical_factor(step_parameter):
                 # returns True if learning should continue
@@ -653,6 +743,34 @@ class MODEL(object):
                     add_train_res = train_res[train_operations_map[2]:train_operations_map[3]]
                 if summary_dict is not None:
                     summary_res = train_res[train_operations_map[4]:train_operations_map[5]]
+                if collection_operations is not None:
+                    collection_res = train_res[train_operations_map[6]:train_operations_map[7]]
+
+                if collection_operations is not None:
+                    if step in collection_steps:
+                        print_counter = 0
+                        collection_dictionary['step'].append(step)
+                        for collection_operation, real_operation in zip(collection_operations, real_to_print_collection):
+                            if isinstance(real_operation, list) or isinstance(real_operation, tuple):
+                                choose_where_to_print('%s: ' % train_add_operation)
+                                if isinstance(real_operation[0], list) or isinstance(real_operation[0], tuple):
+                                    storage = list()
+                                    for list_idx in range(len(real_operation)):
+                                        storage_item = list()
+                                        for tensor_idx in range(len(real_operation[list_idx])):
+                                            storage_item.append(collection_res[print_counter])
+                                            print_counter += 1
+                                        storage.append(storage_item)
+                                    collection_dictionary[collection_operation].append(storage)
+                                else:
+                                    storage = list()
+                                    for tensor_idx in range(len(real_operation)):
+                                        storage.append(collection_res[print_counter])
+                                        print_counter += 1
+                                    collection_dictionary[collection_operation].append(storage)
+                            else:
+                                collection_dictionary[collection_operation].append(collection_res[print_counter])
+                                print_counter += 1
                     
                 # print('len(add_train_res) = %s' % len(add_train_res))
                 # implementing printing of 'add_text_operations' and 'add_operations'
@@ -692,7 +810,7 @@ class MODEL(object):
                         writer.add_summary(res, step)
         
                 mean_loss += l
-                if ((step - (step // train_frequency) * train_frequency) % averaging_step == 0) and average_summing_started:
+                if ((step - (step // train_frequency) * train_frequency + 1) % averaging_step == 0) and average_summing_started:
                     labels = np.concatenate(list(batches)[1:])
                     average_percentage_of_correct += percent_of_correct_predictions(predictions, labels)
                 average_summing_started = True
@@ -771,7 +889,7 @@ class MODEL(object):
                                         validation_percentage_of_correct += percent_of_correct_predictions(validation_result[0], b[1])
                                         cur_BPC, cur_perplex = compute_BPC_and_perplexity(validation_result[0], b[1])
                                         validation_BPC += cur_BPC
-                                        validation_perplexity += cur_cur_perplex
+                                        validation_perplexity += cur_perplex
                                         if print_intermediate_results or (path_to_file_for_saving_prints is not None):
                                             if validation_add_operations is not None:
                                                 if idx < num_validation_prints:
@@ -804,8 +922,11 @@ class MODEL(object):
                                     if print_intermediate_results or (path_to_file_for_saving_prints is not None):
                                         if validation_example_length is not None:
                                             choose_where_to_print('%s example (input and output):' % key)
+                                            choose_where_to_print('input:')
                                             choose_where_to_print(fact)
+                                            choose_where_to_print('********************\noutput:')
                                             choose_where_to_print(predicted)
+                                            choose_where_to_print('********************')
                                         choose_where_to_print('%s percentage of correct: %.2f%%\n' % (key, validation_percentage_of_correct))
                                     data_for_plot[key]['step'].append(step)
                                     data_for_plot[key]['percentage'].append(validation_percentage_of_correct)
@@ -819,8 +940,11 @@ class MODEL(object):
                                     b = self._valid_batches.next()
                                     validation_result = session.run(validation_operations,
                                                                     {self._sample_input: b[0]})
+                                    #print('validation_result[0] =', validation_result[0], '\nb[1] =', b[1]) 
                                     validation_percentage_of_correct += percent_of_correct_predictions(validation_result[0], b[1])
-                                    cur_BPC, cur_perplex = compute_BPC_and_perplexity(validation_result[0], b[1])
+                                    #cur_BPC, cur_perplex = compute_BPC_and_perplexity(validation_result[0], b[1])
+                                    cur_BPC, _ = compute_BPC_and_perplexity(validation_result[0], b[1])
+                                    cur_perplex = compute_perplexity(validation_result[0])
                                     validation_BPC += cur_BPC
                                     validation_perplexity += cur_perplex
                                     if print_intermediate_results or (path_to_file_for_saving_prints is not None):
@@ -855,8 +979,11 @@ class MODEL(object):
                                 if print_intermediate_results or (path_to_file_for_saving_prints is not None):
                                     if validation_example_length is not None:
                                         choose_where_to_print('validation example (input and output):')
+                                        choose_where_to_print('input:')
                                         choose_where_to_print(fact)
+                                        choose_where_to_print('********************\noutput:')
                                         choose_where_to_print(predicted)
+                                        choose_where_to_print('********************')
                                     choose_where_to_print('Validation percentage of correct: %.2f%%\n' % validation_percentage_of_correct)
                                 data_for_plot['validation']['step'].append(step)
                                 data_for_plot['validation']['percentage'].append(validation_percentage_of_correct)
@@ -868,9 +995,11 @@ class MODEL(object):
             finish_time = time.clock()
             if save_path is not None:
                 self.save_graph(session, save_path)
-
+        path_to_folder, pickle_name = self.split_to_path_name(path_to_file_for_saving_collection)
+        self.pickle(path_to_folder, pickle_name, collection_dictionary)
         self._last_num_steps = step
         run_result = {"metadata": list(), "data": data_for_plot, "time": (finish_time - start_time)}
+
         if optional_feed_dict is None:
             run_result["metadata"] = self._generate_metadata(half_life,
                                                              decay,
@@ -943,18 +1072,18 @@ class MODEL(object):
 
         
 
-    def plot_all(self, results_numbers, plot_validation=False, save_folder=None, show=False):
+    def plot_all(self, results_numbers, plot_validation=False, indent=0, save_folder=None, show=False):
         percentage_ylists = list()
         perplexity_ylists = list()
         BPC_ylists = list()
         xlists = list()
         labels = list()
         def add_key_all(result_num, Key):
-            percentage_ylists.append(self._results[result_num]["data"][Key]['percentage'])
+            percentage_ylists.append(self._results[result_num]["data"][Key]['percentage'][indent:])
             labels.append(Key)   
-            perplexity_ylists.append(self._results[result_num]["data"][Key]['perplexity'])
-            BPC_ylists.append(self._results[result_num]["data"][Key]['BPC'])
-            xlists.append(self._results[result_num]["data"][Key]['step'])             
+            perplexity_ylists.append(self._results[result_num]["data"][Key]['perplexity'][indent:])
+            BPC_ylists.append(self._results[result_num]["data"][Key]['BPC'][indent:])
+            xlists.append(self._results[result_num]["data"][Key]['step'][indent:])             
         if len(results_numbers) > 1:
             for result_number in results_numbers:
                 add_key_all(result_number, 'train')

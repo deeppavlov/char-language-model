@@ -18,8 +18,6 @@ import zipfile
 from six.moves import range
 from six.moves.urllib.request import urlretrieve
 import collections
-import matplotlib
-matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import codecs
 import time
@@ -196,7 +194,7 @@ class HM_LSTM(MODEL):
                 tensor,
                 dim,
                 appendix):
-        with tf.name_scope('L2_norm'+appendix):
+        with tf.name_scope('L2_norm'):
             square = tf.square(tensor, name="square_in_L2_norm"+appendix)
             reduced = tf.reduce_mean(square,
                                      dim,
@@ -210,8 +208,8 @@ class HM_LSTM(MODEL):
                        state,                 # A tuple of tensors containing h^l_{t-1}, c^l_{t-1} and z^l_{t-1}
                        bottom_up,             # A tensor h^{l-1}_t  
                        top_down,              # A tensor h^{l+1}_{t-1}
-                       boundary_state_down):   # A tensor z^{l-1}_t
-
+                       boundary_state_down,   # A tensor z^{l-1}_t
+                       appendix):
         # method implements operations (2) - (7) (shortly (1)) performed on idx-th layer
         # ONLY NOT FOR LAST LAYER! Last layer computations are implemented in self.last_layer method
         # and returns 3 tensors: hidden state, memory state
@@ -221,69 +219,61 @@ class HM_LSTM(MODEL):
             # batch_size of processed data
             current_batch_size = bottom_up.get_shape().as_list()[0]
 
-            one = tf.constant([[1.]], name="one_constant")
+
             # note: in several next operations tf.transpose method is applied repeatedly.
             #       It was used for broadcasting activation along vectors in same batches
 
             # following operation computes a product z^l_{t-1} x h^{l+1}_{t-1} for formula (6)
             top_down_prepaired = tf.transpose(tf.multiply(tf.transpose(state[2],
-                                                                       name="transposed_state2_in_top_down_prepaired"),
+                                                                       name="transposed_state2_in_top_down_prepaired"+appendix),
                                                           tf.transpose(top_down,
-                                                                       name="transposed_top_down_in_top_down_prepaired"),
-                                                          name="multiply_in_top_down_prepaired"),
-                                              name="top_down_prepaired")
+                                                                       name="transposed_top_down_in_top_down_prepaired"+appendix),
+                                                          name="multiply_in_top_down_prepaired"+appendix),
+                                              name="top_down_prepaired"+appendix)
 
             # this one cumputes a product z^{l-1}_t x h^{l-1}_t for formula (7)
             bottom_up_prepaired = tf.transpose(tf.multiply(tf.transpose(boundary_state_down,
-                                                                        name="transposed_boundary_state_down_in_bottom_down_prepaired"),
+                                                                        name="transposed_boundary_state_down_in_bottom_down_prepaired"+appendix),
                                                            tf.transpose(bottom_up,
-                                                                        name="transposed_bottom_up_in_bottom_up_prepaired"),
-                                                           name="multiply_in_bottom_up_prepaired"),
-                                               name="bottom_up_prepaired")
-            
-            boundary_state_reversed = tf.subtract(one, state[2], name="boundary_state_reversed")
-            state0_prepaired = tf.transpose(tf.multiply(tf.transpose(boundary_state_reversed,
-                                                                     name="transposed_boundary_state_reversed_in_state0_prepaired"),
-                                                        tf.transpose(state[0],
-                                                                     name="transposed_state0_state0_prepaired"),
-                                                        name="multiply_in_state0_prepaired"),
-                                            name="state0_prepaired")
-            
+                                                                        name="transposed_bottom_up_in_bottom_up_prepaired"+appendix),
+                                                           name="multiply_in_bottom_up_prepaired"+appendix),
+                                               name="bottom_up_prepaired"+appendix)
 
             # Matrix multiplications in formulas (5) - (7) and sum in argument of function f_slice
             # in formula (4) are united in one operation
             # Matrices U^l_l, U^l_{l+1} and W^l_{l-1} are concatenated into one matrix self.Matrices[idx]
             # and vectors h^l_{t-1}, z^l_{t-1} x h^{l+1}_{t-1} and  z^{l-1}_t x h^{l-1}_t are 
             # concatenated into vector X
-            X = tf.concat([bottom_up_prepaired, state0_prepaired, top_down_prepaired],
+            X = tf.concat([state[0], top_down_prepaired, bottom_up_prepaired],
                           1,
-                          name="X")
+                          name="X"+appendix)
             concat = tf.add(tf.matmul(X,
                                       self.Matrices[idx],
-                                      name="matmul_in_concat"),
+                                      name="matmul_in_concat"+appendix),
                             self.Biases[idx],
-                            name="concat")
+                            name="concat"+appendix)
 
             # following operations implement function vector implementation in formula (4)
             # and compute f^l_t, i^l_t, o^l_t, g^l_t and z^l_t
             [sigmoid_arg, tanh_arg, hard_sigm_arg] = tf.split(concat,
                                                               [3*self._num_nodes[idx], self._num_nodes[idx], 1],
                                                               axis=1,
-                                                              name="split_to_function_arguments")
+                                                              name="split_to_function_arguments"+appendix)
             
             L2_norm_of_hard_sigm_arg = self.L2_norm(hard_sigm_arg,
-                                                    1,
-                                                    "_hard_sigm")
+                                                    0,
+                                                    "_hard_sigm"+appendix)
             
-            gate_concat = tf.sigmoid(sigmoid_arg, name="gate_concat")
+            gate_concat = tf.sigmoid(sigmoid_arg, name="gate_concat"+appendix)
             [forget_gate, input_gate, output_gate] = tf.split(gate_concat,
                                                               3,
                                                               axis=1,
                                                               name="split_to_gates_op")
-            modification_vector = tf.tanh(tanh_arg, name="modification_vector")
+            modification_vector = tf.tanh(tanh_arg, name="modification_vector"+appendix)
             # self.compute_boundary_state works as step function in forward pass
             # and as hard sigm in backward pass 
-            boundary_state = self.compute_boundary_state(hard_sigm_arg) 
+            boundary_state = self.compute_boundary_state(hard_sigm_arg,
+                                                         appendix) 
 
             # Next operations implement c^l_t vector modification and h^l_t computing according to (2) and (3)
             # Since compute_boundary_state is the step function in forward pass
@@ -300,80 +290,83 @@ class HM_LSTM(MODEL):
             with tf.name_scope('boundary_operations'):
                 update_flag = tf.transpose(tf.to_float(tf.logical_and(tf.equal(state[2],
                                                                                [[0.]],
-                                                                               name="equal_state2_and_0_in_update_flag"),
+                                                                               name="equal_state2_and_0_in_update_flag"+appendix),
                                                                       tf.equal(boundary_state_down,
                                                                                [[1.]],
-                                                                               name="equal_boundary_state_down_and_1_in_update_flag"),
-                                                                      name="logical_and_in_update_flag"),
-                                                       name="to_float_in_update_flag"),
-                                           name="update_flag")
+                                                                               name="equal_boundary_state_down_and_1_in_update_flag"+appendix),
+                                                                      name="logical_and_in_update_flag"+appendix),
+                                                       name="to_float_in_update_flag"+appendix),
+                                           name="update_flag"+appendix)
                 copy_flag = tf.transpose(tf.to_float(tf.logical_and(tf.equal(state[2],
                                                                              [[0.]],
-                                                                             name="equal_state2_and_0_in_copy_flag"),
+                                                                             name="equal_state2_and_0_in_copy_flag"+appendix),
                                                                     tf.equal(boundary_state_down,
                                                                              [[0.]],
-                                                                             name="equal_boundary_state_down_and_0_in_copy_flag"),
-                                                                    name="logical_and_in_copy_flag"),
-                                                     name="to_float_in_copy_flag"),
-                                         name="copy_flag")
+                                                                             name="equal_boundary_state_down_and_0_in_copy_flag"+appendix),
+                                                                    name="logical_and_in_copy_flag"+appendix),
+                                                     name="to_float_in_copy_flag"+appendix),
+                                         name="copy_flag"+appendix)
                 flush_flag = tf.transpose(tf.to_float(tf.equal(state[2],
                                                                [[1.]],
-                                                               name="equal_state2_and_1_in_flush_flag"),
-                                                      name="to_float_in_flush_flag"),
-                                          name="flush_flag")
+                                                               name="equal_state2_and_1_in_flush_flag"+appendix),
+                                                      name="to_float_in_flush_flag"+appendix),
+                                          name="flush_flag"+appendix)
                 # constant 'one' is used for building negations
-                one = tf.constant([[1.]], name="one_constant")
-                tr_memory = tf.transpose(state[1], name="tr_memory")
-                tr_forget_gate = tf.transpose(forget_gate, name="tr_forget_gate")
-                tr_input_gate = tf.transpose(input_gate, name="tr_input_gate")
-                tr_output_gate = tf.transpose(output_gate, name="tr_output_gate")
-                tr_modification_vector = tf.transpose(modification_vector, name="tr_modification_vector")
+                one = tf.constant([[1.]], name="one_constant"+appendix)
+                tr_memory = tf.transpose(state[1], name="tr_memory"+appendix)
+                tr_forget_gate = tf.transpose(forget_gate, name="tr_forget_gate"+appendix)
+                tr_input_gate = tf.transpose(input_gate, name="tr_input_gate"+appendix)
+                tr_output_gate = tf.transpose(output_gate, name="tr_output_gate"+appendix)
+                tr_modification_vector = tf.transpose(modification_vector, name="tr_modification_vector"+appendix)
                 # new memory computation
                 update_term = tf.multiply(update_flag,
                                           tf.add(tf.multiply(tr_forget_gate,
                                                              tr_memory,
-                                                             name="multiply_forget_and_memory_in_update_term"),
+                                                             name="multiply_forget_and_memory_in_update_term"+appendix),
                                                  tf.multiply(tr_input_gate,
                                                              tr_modification_vector,
-                                                             name="multiply_input_and_modification_in_update_term"),
-                                                 name="add_in_update_term"),
-                                          name="update_term")
-                copy_term = tf.multiply(copy_flag, tr_memory, name="copy_term")
-
+                                                             name="multiply_input_and_modification_in_update_term"+appendix),
+                                                 name="add_in_update_term"+appendix),
+                                          name="update_term"+appendix)
+                copy_term = tf.multiply(copy_flag, tr_memory, name="copy_term"+appendix)
                 
                 flush_term = tf.multiply(flush_flag,
+                                         tr_modification_vector,
+                                         name="flush_term"+appendix) 
+                
+                """flush_term = tf.multiply(flush_flag,
                                          tf.multiply(tr_input_gate,
                                                      tr_modification_vector,
-                                                     name="multiply_input_and_modification_in_flush_term"),
-                                         name="flush_term")
+                                                     name="multiply_input_and_modification_in_flush_term"+appendix),
+                                         name="flush_term"+appendix)"""
                 
                 tr_new_memory = tf.add(tf.add(update_term,
                                               copy_term,
-                                              name="add_update_and_copy_in_tr_new_memory"),
+                                              name="add_update_and_copy_in_tr_new_memory"+appendix),
                                        flush_term,
-                                       name="tr_new_memory")
-                new_memory = tf.transpose(tr_new_memory, name="new_memory")
+                                       name="tr_new_memory"+appendix)
+                new_memory = tf.transpose(tr_new_memory, name="new_memory"+appendix)
                 # new hidden states computation
-                tr_hidden = tf.transpose(state[0], name="tr_hidden")
-                copy_term = tf.multiply(copy_flag, tr_hidden, name="copy_term_for_hidden")
+                tr_hidden = tf.transpose(state[0], name="tr_hidden"+appendix)
+                copy_term = tf.multiply(copy_flag, tr_hidden, name="copy_term_for_hidden"+appendix)
                 else_term = tf.multiply(tf.multiply(tf.subtract(one,
                                                                 copy_flag,
-                                                                name="subtract_in_else_term"),
+                                                                name="subtract_in_else_term"+appendix),
                                                     tr_output_gate,
-                                                    name="multiply_subtract_and_tr_output_gate_in_else_term"),
-                                        tf.tanh(tr_new_memory, name="tanh_in_else_term"),
-                                        name="else_term")
-                new_hidden = tf.transpose(tf.add(copy_term, else_term, name="new_hidden"),
-                                          name="new_hidden")
+                                                    name="multiply_subtract_and_tr_output_gate_in_else_term"+appendix),
+                                        tf.tanh(tr_new_memory, name="tanh_in_else_term"+appendix),
+                                        name="else_term"+appendix)
+                new_hidden = tf.transpose(tf.add(copy_term, else_term, name="new_hidden"+appendix),
+                                          name="new_hidden"+appendix)
                 
-                helper = {"L2_norm_of_hard_sigm_arg": L2_norm_of_hard_sigm_arg,
-                          "hard_sigm_arg": hard_sigm_arg}
+                helper = {"L2_norm_of_hard_sigm_arg": L2_norm_of_hard_sigm_arg}
         return new_hidden, new_memory, boundary_state, helper
     
     def last_layer(self,
                    state,                 # A tuple of tensors containing h^L_{t-1}, c^L_{t-1} (L - total number of layers)
                    bottom_up,             # A tensor h^{L-1}_t  
-                   boundary_state_down):   # A tensor z^{L-1}_t
+                   boundary_state_down,   # A tensor z^{L-1}_t
+                   appendix):
         # method implements operations (2) - (7) (shortly (1)) performed on the last layer
         # and returns 2 tensors: hidden state, memory state (h^L_t, c^L_t accordingly)
         
@@ -389,24 +382,24 @@ class HM_LSTM(MODEL):
 
             # this one cumputes a product z^{l-1}_t x h^{l-1}_t for formula (7)
             bottom_up_prepaired = tf.transpose(tf.multiply(tf.transpose(boundary_state_down,
-                                                                        name="transposed_boundary_state_down_in_bottom_down_prepaired"),
+                                                                        name="transposed_boundary_state_down_in_bottom_down_prepaired"+appendix),
                                                            tf.transpose(bottom_up,
-                                                                        name="transposed_bottom_up_in_bottom_up_prepaired"),
-                                                           name="multiply_in_bottom_up_prepaired"),
-                                               name="bottom_up_prepaired")
+                                                                        name="transposed_bottom_up_in_bottom_up_prepaired"+appendix),
+                                                           name="multiply_in_bottom_up_prepaired"+appendix),
+                                               name="bottom_up_prepaired"+appendix)
 
             # Matrix multiplications in formulas (5) - (7) and sum in argument of function f_slice
             # in formula (4) are united in one operation
             # Matrices U^l_l and W^l_{l-1} are concatenated into one matrix self.Matrices[last] 
             # and vectors h^l_{t-1} and  z^{l-1}_t x h^{l-1}_t are concatenated into vector X
-            X = tf.concat([bottom_up_prepaired, state[0]],
+            X = tf.concat([state[0], bottom_up_prepaired],
                           1,
-                          name="X")                                          
+                          name="X"+appendix)                                          
             concat = tf.add(tf.matmul(X,
                                       self.Matrices[last],
-                                      name="matmul_in_concat"),
+                                      name="matmul_in_concat"+appendix),
                             self.Biases[last],
-                            name="concat")
+                            name="concat"+appendix)
 
             # following operations implement function vector implementation in formula (4)
             # and compute f^l_t, i^l_t, o^l_t, g^l_t and z^l_t
@@ -414,13 +407,13 @@ class HM_LSTM(MODEL):
             [sigmoid_arg, tanh_arg] = tf.split(concat, 
                                                [3*self._num_nodes[last], self._num_nodes[last]],
                                                axis=1,
-                                               name="split_to_function_arguments")                                          
-            gate_concat = tf.sigmoid(sigmoid_arg, name="gate_concat")
+                                               name="split_to_function_arguments"+appendix)                                          
+            gate_concat = tf.sigmoid(sigmoid_arg, name="gate_concat"+appendix)
             [forget_gate, input_gate, output_gate] = tf.split(gate_concat,
                                                               3,
                                                               axis=1,
                                                               name="split_to_gates_op")
-            modification_vector = tf.tanh(tanh_arg, name="modification_vector")
+            modification_vector = tf.tanh(tanh_arg, name="modification_vector"+appendix)
 
             # Next operations implement c^l_t vector modification and h^l_t computing according to (2) and (3)
             # Check up detailed description in previous method's comments 
@@ -431,62 +424,63 @@ class HM_LSTM(MODEL):
             with tf.name_scope('boundary_operations'):
                 update_flag = tf.transpose(tf.to_float(tf.equal(boundary_state_down,
                                                                 1.,
-                                                                name="equal_boundary_state_down_and_1_in_update_flag"),
-                                                       name="to_float_in_update_flag"),
-                                           name="update_flag")
+                                                                name="equal_boundary_state_down_and_1_in_update_flag"+appendix),
+                                                       name="to_float_in_update_flag"+appendix),
+                                           name="update_flag"+appendix)
                 # constant 'one' is used for building negations
-                one = tf.constant([[1.]], name="one_constant")
-                copy_flag = tf.subtract(one, update_flag, name="copy_flag")
-                tr_memory = tf.transpose(state[1], name="tr_memory")
-                tr_forget_gate = tf.transpose(forget_gate, name="tr_forget_gate")
-                tr_input_gate = tf.transpose(input_gate, name="tr_input_gate")
-                tr_output_gate = tf.transpose(output_gate, name="tr_output_gate")
-                tr_modification_vector = tf.transpose(modification_vector, name="tr_modification_gate")
+                one = tf.constant([[1.]], name="one_constant"+appendix)
+                copy_flag = tf.subtract(one, update_flag, name="copy_flag"+appendix)
+                tr_memory = tf.transpose(state[1], name="tr_memory"+appendix)
+                tr_forget_gate = tf.transpose(forget_gate, name="tr_forget_gate"+appendix)
+                tr_input_gate = tf.transpose(input_gate, name="tr_input_gate"+appendix)
+                tr_output_gate = tf.transpose(output_gate, name="tr_output_gate"+appendix)
+                tr_modification_vector = tf.transpose(modification_vector, name="tr_modification_gate"+appendix)
                 # new memory computation
                 update_term = tf.multiply(update_flag,
                                           tf.add(tf.multiply(tr_forget_gate,
                                                              tr_memory,
-                                                             name="multiply_forget_and_memory_in_update_term"),
+                                                             name="multiply_forget_and_memory_in_update_term"+appendix),
                                                  tf.multiply(tr_input_gate,
                                                              tr_modification_vector,
-                                                             name="multiply_input_and_modification_in_update_term"),
-                                                 name="add_in_update_term"),
-                                          name="update_term")
-                copy_term = tf.multiply(copy_flag, tr_memory, name="copy_term")
+                                                             name="multiply_input_and_modification_in_update_term"+appendix),
+                                                 name="add_in_update_term"+appendix),
+                                          name="update_term"+appendix)
+                copy_term = tf.multiply(copy_flag, tr_memory, name="copy_term"+appendix)
                 tr_new_memory = tf.add(update_term,
                                        copy_term,
-                                       name="tr_new_memory")
-                new_memory = tf.transpose(tr_new_memory, name="new_memory")
+                                       name="tr_new_memory"+appendix)
+                new_memory = tf.transpose(tr_new_memory, name="new_memory"+appendix)
                 # new hidden states computation
-                tr_hidden = tf.transpose(state[0], name="tr_hidden")
-                copy_term = tf.multiply(copy_flag, tr_hidden, name="copy_term_for_hidden")
+                tr_hidden = tf.transpose(state[0], name="tr_hidden"+appendix)
+                copy_term = tf.multiply(copy_flag, tr_hidden, name="copy_term_for_hidden"+appendix)
                 else_term = tf.multiply(tf.multiply(tf.subtract(one,
                                                                 copy_flag,
-                                                                name="subtract_in_else_term"),
+                                                                name="subtract_in_else_term"+appendix),
                                                     tr_output_gate,
-                                                    name="multiply_subtract_and_tr_output_gate_in_else_term"),
-                                        tf.tanh(tr_new_memory, name="tanh_in_else_term"),
-                                        name="else_term")
-                new_hidden = tf.transpose(tf.add(copy_term, else_term, name="new_hidden"),
-                                          name="new_hidden")
+                                                    name="multiply_subtract_and_tr_output_gate_in_else_term"+appendix),
+                                        tf.tanh(tr_new_memory, name="tanh_in_else_term"+appendix),
+                                        name="else_term"+appendix)
+                new_hidden = tf.transpose(tf.add(copy_term, else_term, name="new_hidden"+appendix),
+                                          name="new_hidden"+appendix)
         return new_hidden, new_memory
      
     
     def compute_boundary_state(self,
-                               X):
+                               X,
+                               appendix):
         # Elementwise calculates step function 
         # During backward pass works as hard sigm
         with self._graph.gradient_override_map({"Sign": "HardSigmoid"}):
-            X = tf.sign(X, name="sign_func_in_compute_boundary")
+            X = tf.sign(X, name="sign_func_in_compute_boundary"+appendix)
         """X = tf.sign(X)"""
         X = tf.divide(tf.add(X,
                              tf.constant([[1.]]),
-                             name="add_in_compute_boundary_state"),
+                             name="add_in_compute_boundary_state"+appendix),
                       2.,
-                      name="output_of_compute_boundary_state")
+                      name="output_of_compute_boundary_state"+appendix)
         return X
     
-    def iteration(self, inp, state, iter_idx):
+    def iteration(self, inp, state, iter_idx, appendix):
         # This function implements processing of one character embedding by HM_LSTM
         # 'inp' is one character embedding
         # 'state' is network state from previous layer
@@ -506,14 +500,17 @@ class HM_LSTM(MODEL):
             # argument on the first layer
             activated_boundary_states = tf.constant(1.,
                                                     shape=[current_batch_size, 1],
-                                                    name="activated_boundary_states_in_iteration_function")
+                                                    name="activated_boundary_states_in_iteration_function"+appendix)
+
+            new_appendix_templ = appendix + "_layernum"
 
             # The first layer is calculated outside the loop
             hidden, memory, boundary, helper = self.not_last_layer(0,
                                                                    state[0],
                                                                    inp,
                                                                    state[1][0],
-                                                                   activated_boundary_states)
+                                                                   activated_boundary_states,
+                                                                   new_appendix_templ+str(0))
 
             not_last_layer_helpers = list()
             not_last_layer_helpers.append(helper)
@@ -526,44 +523,45 @@ class HM_LSTM(MODEL):
                                                                           state[idx+1],
                                                                           hidden,
                                                                           state[idx+2][0],
-                                                                          boundary)
+                                                                          boundary,
+                                                                          new_appendix_templ+str(idx+1))
                     not_last_layer_helpers.append(helper)
                     new_state.append((hidden, memory, boundary))
                     boundaries.append(boundary)
             hidden, memory = self.last_layer(state[-1],
                                              hidden,
-                                             boundary)
+                                             boundary,
+                                             new_appendix_templ+str(self._num_layers-1))
             new_state.append((hidden, memory))
             L2_norm_of_hard_sigm_arg_list = list()
             helper = {"L2_norm_of_hard_sigm_arg": tf.concat([helper["L2_norm_of_hard_sigm_arg"] for helper in not_last_layer_helpers],
                                                             1,
-                                                            name="L2_norm_of_hard_sigm_arg_for_all_layers"),
-                      "hard_sigm_arg": tf.concat([helper["hard_sigm_arg"] for helper in not_last_layer_helpers],
-                                                 1,
-                                                 name="hard_sigm_arg_for_all_layers")}
-            return new_state, tf.concat(boundaries, 1, name="iteration_boundaries_output"), helper
+                                                            name="L2_norm_of_hard_sigm_arg_for_all_layers"+appendix)}
+            return new_state, tf.concat(boundaries, 1, name="iteration_boundaries_output"+appendix), helper
     
     def embedding_module(self,
-                         inputs):
+                         inputs,
+                         appendix):
         # This function embeds input one-hot encodded character vector into a vector of dimension embedding_size
         # For computation acceleration inputs are concatenated before being multiplied on self.embedding_weights
         with tf.name_scope('embedding_module'):
             current_num_unrollings = len(inputs)
             inputs = tf.concat(inputs,
                                0,
-                               name="inputs_concat_in_embedding_module")
+                               name="inputs_concat_in_embedding_module"+appendix)
             embeddings = tf.matmul(inputs,
                                    self.embedding_weights,
-                                   name="concatenated_embeddings_in_embedding_module")
+                                   name="concatenated_embeddings_in_embedding_module"+appendix)
             return tf.split(embeddings,
                             current_num_unrollings,
                             axis=0,
-                            name="embedding_module_output")
+                            name="embedding_module_output"+appendix)
     
     
     def RNN_module(self,
                    embedded_inputs,
-                   saved_state):
+                   saved_state,
+                   appendix):
         # This function implements processing of embedded inputs by HM_LSTM
         # Function returns: state of recurrent neural network after last character processing 'state',
         # hidden states obtained on each character 'saved_hidden_states' and boundaries on each layer 
@@ -583,10 +581,11 @@ class HM_LSTM(MODEL):
 
             # 'saved_iteration_boundaries' is a list
             saved_iteration_boundaries = list()
+            new_appendix_templ = appendix + '_unrolling'
             state = saved_state
             iteration_helpers = list()
             for emb_idx, emb in enumerate(embedded_inputs):
-                state, iteration_boundaries, helper = self.iteration(emb, state, emb_idx)
+                state, iteration_boundaries, helper = self.iteration(emb, state, emb_idx, new_appendix_templ+str(emb_idx))
                 iteration_helpers.append(helper)
                 saved_iteration_boundaries.append(iteration_boundaries)
                 for layer_state, saved_hidden in zip(state, saved_hidden_states):
@@ -603,65 +602,56 @@ class HM_LSTM(MODEL):
                 for layer_idx, saved_hidden in enumerate(saved_hidden_states):
                     stacked_for_L2_norm = tf.stack(saved_hidden,
                                                    axis=1,
-                                                   name="stacked_hidden_states_on_layer%s"%layer_idx)
+                                                   name="stacked_hidden_states_on_layer%s"%layer_idx+appendix)
                     L2_norm_by_layers.append(tf.reshape(self.L2_norm(stacked_for_L2_norm,
                                                                      2,
-                                                                     "_for_layer%s" % layer_idx),
+                                                                     "_for_layer%s" % layer_idx+appendix),
                                                         shape,
-                                                        name="L2_norm_for_layer%s" % layer_idx))
-                L2_norm = tf.stack(L2_norm_by_layers, axis=2, name="L2_norm")
+                                                        name="L2_norm_for_layer%s" % layer_idx+appendix))
+                L2_norm = tf.stack(L2_norm_by_layers, axis=2, name="L2_norm"+appendix)
 
             for idx, layer_saved in enumerate(saved_hidden_states):
-                saved_hidden_states[idx] = tf.concat(layer_saved, 0, name="hidden_concat_in_RNN_module_on_layer%s"%idx)
+                saved_hidden_states[idx] = tf.concat(layer_saved, 0, name=("hidden_concat_in_RNN_module_on_layer%s"%idx)+appendix)
 
             helper = {"L2_norm_of_hard_sigm_arg": tf.stack([helper["L2_norm_of_hard_sigm_arg"] for helper in iteration_helpers],
                                                            axis=1,
-                                                           name="L2_norm_of_hard_sigm_arg_for_all_iterations"),
-                      "hard_sigm_arg": tf.stack([helper["hard_sigm_arg"] for helper in iteration_helpers],
-                                                axis=1,
-                                                name="hard_sigm_arg_for_all_iterations"),
+                                                           name="L2_norm_of_hard_sigm_arg_for_all_iterations"+appendix),
                       "all_boundaries": tf.stack(saved_iteration_boundaries,
                                                  axis=1,
-                                                 name="stack_of_boundaries"),
+                                                 name="stack_of_boundaries"+appendix),
                       "L2_norm_of_hidden_states": L2_norm}
             return state, saved_hidden_states, helper
             
     
     def output_module(self,
-                      hidden_states):
+                      hidden_states,
+                      appendix):
         with tf.name_scope('output_module'):
-            concat = tf.concat(hidden_states, 1, name="total_concat_hidden")
+            concat = tf.concat(hidden_states, 1, name="total_concat_hidden"+appendix)
             output_module_gates = tf.transpose(tf.sigmoid(tf.matmul(concat,
                                                                     self.output_module_gates_weights,
-                                                                    name="matmul_in_output_module_gates"),
-                                                          name="sigmoid_in_output_module_gates"),
-                                               name="output_module_gates")
+                                                                    name="matmul_in_output_module_gates"+appendix),
+                                                          name="sigmoid_in_output_module_gates"+appendix),
+                                               name="output_module_gates"+appendix)
             output_module_gates = tf.split(output_module_gates,
                                            self._num_layers,
                                            axis=0,
-                                           name="split_of_output_module_gates")
+                                           name="split_of_output_module_gates"+appendix)
             tr_gated_hidden_states = list()
             for idx, hidden_state in enumerate(hidden_states):
-                tr_hidden_state = tf.transpose(hidden_state, name="tr_hidden_state_total_%s"%idx)
+                tr_hidden_state = tf.transpose(hidden_state, name=("tr_hidden_state_total_%s"%idx)+appendix)
                 tr_gated_hidden_states.append(tf.multiply(output_module_gates[idx],
                                                           tr_hidden_state,
-                                                          name="tr_gated_hidden_states_%s"%idx))
+                                                          name=("tr_gated_hidden_states_%s"%idx)+appendix))
             gated_hidden_states = tf.transpose(tf.concat(tr_gated_hidden_states,
                                                          0,
-                                                         name="concat_in_gated_hidden_states"),
-                                               name="gated_hidden_states")
-            output_embeddings = tf.nn.relu(tf.add(tf.matmul(gated_hidden_states,
-                                                            self.output_embedding_weights,
-                                                            name="matmul_in_output_embeddings"),
-                                                  self.output_embedding_bias,
-                                                  name="xW_plus_b_in_output_embeddings"),
-                                           name="output_embeddings")
-            return tf.add(tf.matmul(output_embeddings,
+                                                         name="concat_in_gated_hidden_states"+appendix),
+                                               name="gated_hidden_states"+appendix)
+            return tf.add(tf.matmul(gated_hidden_states,
                                     self.output_weights,
-                                    name="matmul_in_logits"),
+                                    name="matmul_in_logits_output"+appendix),
                           self.output_bias,
-                          name="logits")
-            
+                          name="logits"+appendix)
         
     
     def __init__(self,
@@ -676,9 +666,7 @@ class HM_LSTM(MODEL):
                  slope_half_life,
                  train_text,
                  valid_text,
-                 embedding_size=128,
-                 output_embedding_size=1024,
-                 init_parameter=1.):
+                 embedding_size=128):
         self._results = list()
         self._batch_size = batch_size
         self._vocabulary = vocabulary
@@ -694,8 +682,6 @@ class HM_LSTM(MODEL):
         self._valid_text = valid_text
         self._valid_size = len(valid_text)
         self._embedding_size = embedding_size
-        self._output_embedding_size = output_embedding_size
-        self._init_parameter = init_parameter
         self._indices = {"batch_size": 0,
                          "num_unrollings": 1,
                          "num_layers": 2,
@@ -708,9 +694,7 @@ class HM_LSTM(MODEL):
                          "slope_growth": 9,
                          "slope_half_life": 10,
                          "embedding_size": 11,
-                         "output_embedding_size": 12,
-                         "init_parameter": 13,
-                         "type": 14}
+                         "type": 12}
         self._graph = tf.Graph()
         
         self._last_num_steps = 0
@@ -720,7 +704,7 @@ class HM_LSTM(MODEL):
             with self._graph.device('/gpu:0'):
                 # embedding module variables
                 self.embedding_weights = tf.Variable(tf.truncated_normal([self._vocabulary_size, self._embedding_size],
-                                                                         stddev = math.sqrt(self._init_parameter*1000/self._vocabulary_size),
+                                                                         stddev = math.sqrt(1./self._vocabulary_size),
                                                                          name="embeddings_matrix_initialize"), 
                                                      name="embeddings_matrix_variable")
                 
@@ -737,7 +721,7 @@ class HM_LSTM(MODEL):
                 self.Matrices.append(tf.Variable(tf.truncated_normal([self._embedding_size + self._num_nodes[0] + self._num_nodes[1],
                                                                       4 * self._num_nodes[0] + 1],
                                                                      mean=0.,
-                                                                     stddev=math.sqrt(self._init_parameter*1000/(self._embedding_size+self._num_nodes[0]+self._num_nodes[1])),
+                                                                     stddev=math.sqrt(self._embedding_size+self._num_nodes[0]+self._num_nodes[1]),
                                                                      name=init_matr_name%0),
                                                  name=matr_name%0))
                 self.Biases.append(tf.Variable(tf.zeros([4 * self._num_nodes[0] + 1],
@@ -748,7 +732,7 @@ class HM_LSTM(MODEL):
                         self.Matrices.append(tf.Variable(tf.truncated_normal([self._num_nodes[i] + self._num_nodes[i+1] + self._num_nodes[i+2],
                                                                               4 * self._num_nodes[i+1] + 1],
                                                                              mean=0.,
-                                                                             stddev=math.sqrt(self._init_parameter*1000/(self._num_nodes[i]+self._num_nodes[i+1]+self._num_nodes[i+2])),
+                                                                             stddev=math.sqrt(1./(self._num_nodes[i]+self._num_nodes[i+1]+self._num_nodes[i+2])),
                                                                              name=init_matr_name%(i+1)),
                                                          name=matr_name%(i+1)))
                         self.Biases.append(tf.Variable(tf.zeros([4 * self._num_nodes[i+1] + 1],
@@ -757,7 +741,7 @@ class HM_LSTM(MODEL):
                 self.Matrices.append(tf.Variable(tf.truncated_normal([self._num_nodes[-1] + self._num_nodes[-2],
                                                                       4 * self._num_nodes[-1]],
                                                                      mean=0.,
-                                                                     stddev=math.sqrt(self._init_parameter*1000/(self._num_nodes[-1]+self._num_nodes[-2])),
+                                                                     stddev=math.sqrt(1./(self._num_nodes[-1]+self._num_nodes[-2])),
                                                                      name=init_matr_name%(self._num_layers-1)),
                                                  name=matr_name%(self._num_layers-1)))     
                 self.Biases.append(tf.Variable(tf.zeros([4 * self._num_nodes[-1]],
@@ -769,23 +753,16 @@ class HM_LSTM(MODEL):
                 # output module variables
                 # output module gates weights (w^l vectors in (formula (11)))
                 self.output_module_gates_weights = tf.Variable(tf.truncated_normal([dim_classifier_input, self._num_layers],
-                                                                                   stddev = math.sqrt(self._init_parameter*1000/dim_classifier_input),
+                                                                                   stddev = math.sqrt(1./dim_classifier_input),
                                                                                    name="output_gates_weights_initializer"),
                                                                name="output_gates_weights")
                 # classifier 
-                self.output_embedding_weights = tf.Variable(tf.truncated_normal([dim_classifier_input, self._output_embedding_size],
-                                                                                stddev=math.sqrt(self._init_parameter*1000/dim_classifier_input),
-                                                                                name="output_embedding_weights_initializer"),
-                                                            name="output_embedding_weights")
-                self.output_embedding_bias = tf.Variable(tf.zeros([self._output_embedding_size], name="output_bias_initializer"),
-                                                         name="output_bias")
-                self.output_weights = tf.Variable(tf.truncated_normal([self._output_embedding_size, self._vocabulary_size],
-                                                                      stddev = math.sqrt(self._init_parameter*1000/self._output_embedding_size),
+                self.output_weights = tf.Variable(tf.truncated_normal([dim_classifier_input, self._vocabulary_size],
+                                                                      stddev = math.sqrt(1./dim_classifier_input),
                                                                       name="output_weights_initializer"),
                                                   name="output_weights")
                 self.output_bias = tf.Variable(tf.zeros([self._vocabulary_size], name="output_bias_initializer"),
                                                name="output_bias")
-                
                 
                 with tf.name_scope('train'):
                     """PLACEHOLDERS train data"""
@@ -860,16 +837,19 @@ class HM_LSTM(MODEL):
                                                        name="grad_mask_multiply_in_hard_sigm"),
                                            name="hard_sigm_grad_output")
 
-                    embedded_inputs = self.embedding_module(train_inputs)
-                    state, hidden_states, train_helper = self.RNN_module(embedded_inputs, saved_state)
-                    logits = self.output_module(hidden_states)
+                    # appendix is used for constructing of tensor name. It is appended to tensor name
+                    # to indicate to which part of graph operation belongs
+                    appendix = "_train"
+                    embedded_inputs = self.embedding_module(train_inputs, appendix)
+                    state, hidden_states, train_helper = self.RNN_module(embedded_inputs, saved_state, appendix)
+                    logits = self.output_module(hidden_states, appendix)
                     
                     self.L2_train = tf.reshape(tf.slice(train_helper["L2_norm_of_hidden_states"],
                                                         [0, 0, 0],
                                                         [1, 10, 1],
-                                                        name="slice_for_L2"),
+                                                        name="slice_for_L2"+appendix),
                                                [-1],
-                                               name="L2")
+                                               name="L2"+appendix)
 
                     save_list = list()
                     save_list_templ = "save_list_assign_layer%s_number%s"
@@ -911,33 +891,19 @@ class HM_LSTM(MODEL):
                     self._half_life = tf.placeholder(tf.int32, name="half_life")
                     self._decay = tf.placeholder(tf.float32, name="decay")
                     """learning rate"""
-                    
-                    # A list of first dimensions of all matrices
-                    # It is used for defining initial learning rate
-                    dimensions = list()
-                    dimensions.append(self._vocabulary_size)
-                    dimensions.append(self._embedding_size + self._num_nodes[0] + self._num_nodes[1])
-                    if self._num_layers > 2:
-                        for i in range(self._num_layers-2):
-                            dimensions.append(self._num_nodes[i] + self._num_nodes[i+1] + self._num_nodes[i+2])
-                    dimensions.append(sum(self._num_nodes))
-                    max_dimension = max(dimensions)
-                    
-                    self._learning_rate = tf.train.exponential_decay(160.*math.sqrt(self._init_parameter/max_dimension),
+                    self._learning_rate = tf.train.exponential_decay(.5,
                                                                      self._global_step,
                                                                      self._half_life,
                                                                      self._decay,
                                                                      staircase=True,
                                                                      name="learning_rate")
-                    #optimizer = tf.train.GradientDescentOptimizer(self._learning_rate)
-                    optimizer = tf.train.AdamOptimizer(learning_rate=self._learning_rate)
+                    optimizer = tf.train.GradientDescentOptimizer(self._learning_rate)
                     gradients, v = zip(*optimizer.compute_gradients(self._loss))
                     gradients, _ = tf.clip_by_global_norm(gradients, 1.25)
                     """optimizer"""
                     self._optimizer = optimizer.apply_gradients(zip(gradients, v), global_step=self._global_step)
                     """train prediction"""
                     self._train_prediction = tf.nn.softmax(logits, name="train_prediction")
-                    
 
                 # Sampling and validation eval: batch 1, no unrolling.
                 with tf.name_scope('validation'):
@@ -1003,12 +969,16 @@ class HM_LSTM(MODEL):
                                                 name=reset_list_templ%(self._num_layers-1, 1)))
                     #reset sample state
                     self._reset_sample_state = tf.group(*reset_list, name="reset_sample_state")
+ 
+                    #reset sample state
+                    self._reset_sample_state = tf.group(*reset_list, name="reset_sample_state")
 
-
-                    sample_embedded_inputs = self.embedding_module([self._sample_input])
+                    appendix = "_validation"
+                    sample_embedded_inputs = self.embedding_module([self._sample_input], appendix)
                     sample_state, sample_hidden_states, validation_helper = self.RNN_module(sample_embedded_inputs,
-                                                                                            saved_sample_state)
-                    sample_logits = self.output_module(sample_hidden_states) 
+                                                                                            saved_sample_state,
+                                                                                            appendix)
+                    sample_logits = self.output_module(sample_hidden_states, appendix) 
 
                     sample_save_list = list()
                     save_list_templ = "save_sample_list_assign_layer%s_number%s"
@@ -1034,7 +1004,7 @@ class HM_LSTM(MODEL):
                         self._sample_prediction = tf.nn.softmax(sample_logits, name="sample_prediction") 
                         self.L2_hidden_states_validation = tf.reshape(validation_helper["L2_norm_of_hidden_states"], [-1], name="L2_hidden_validation")
                         self.boundary = tf.reshape(validation_helper["all_boundaries"], [-1], name="sample_boundary")
-                        self.sigm_arg = tf.reshape(validation_helper["hard_sigm_arg"], [-1], name="sample_sigm_arg")
+                        self.sigm_arg = tf.reshape(validation_helper["L2_norm_of_hard_sigm_arg"], [-1], name="sample_sigm_arg")
 
             """saver"""
             self.saver = tf.train.Saver(max_to_keep=None)
@@ -1055,11 +1025,8 @@ class HM_LSTM(MODEL):
         metadata.append(self._slope_growth)
         metadata.append(self._slope_half_life)
         metadata.append(self._embedding_size)
-        metadata.append(self._output_embedding_size)
-        metadata.append(self._init_parameter)
         metadata.append('HM_LSTM')
         return metadata
-  
   
     def get_boundaries(self, session, num_strings=10, length=75, start_positions=None):
         self._reset_sample_state.run()
@@ -1070,10 +1037,10 @@ class HM_LSTM(MODEL):
                                              1)
         if start_positions is None:
             start_positions = list()
-            if self._valid_size // num_strings < length:
-                num_strings = self._valid_size // length
+            if self._valid_size / num_strings < length:
+                num_strings = self._valid_size / length
             for i in range(num_strings):
-                start_positions.append(i* (self._valid_size // num_strings) + self._valid_size // num_strings // 2)
+                start_positions.append(i* (self._valid_size / num_strings) + self._valid_size / num_strings / 2)
             while self._valid_size - start_positions[-1] < length:
                 del start_positions[-1]
         text_list = list()
@@ -1103,7 +1070,8 @@ class HM_LSTM(MODEL):
                     letters_parsed = -1
                     
             _ = self._sample_prediction.eval({self._sample_input: b[0]})
-        return text_list, boundaries_list  
+        return text_list, boundaries_list 
+
 
 
 
@@ -1111,50 +1079,28 @@ class HM_LSTM(MODEL):
 model = HM_LSTM(53,
                  vocabulary,
                  characters_positions_in_vocabulary,
-                 100,
+                 10,
                  3,
-                 [256, 256, 256],
-                 .1,               # init_slope
-                 0.2,                  # slope_growth
-                 1000,
+                 [512, 512, 512],
+                 .001,               # init_slope
+                 0.001,                  # slope_growth
+                 100,
                  train_text,
                  valid_text)
 
-name_of_run = 'tenth'
-text_list, boundary_list = model.run_for_analitics(model.get_boundaries,
-                                                'peganov/HM_LSTM/'+name_of_run+'/variables',
-                                                [10, 75, None])
+model.run(20,                # number of times learning_rate is decreased
+          0.9,              # a factor by which learning_rate is decreased
+            100,            # each 'train_frequency' steps loss and percent correctly predicted letters is calculated
+            200,             # minimum number of times loss and percent correctly predicted letters are calculated while learning (train points)
+            3,              # if during half total spent time loss decreased by less than 'stop_percent' percents learning process is stopped
+            1,              # when train point is obtained validation may be performed
+            20,             # when train point percent is calculated results got on averaging_number chunks are averaged
+          fixed_number_of_steps=20000,
 
-for i in range(10):
-    text_boundaries_plot(text_list[i],
-                    boundary_list[i],
-                    'boundaries by layer',
-                    ['peganov', 'HM_LSTM', name_of_run, 'plots'],
-                    name_of_run+'#%s' % i,
-                    show=False)
+            validation_add_operations = ['self.sigm_arg'],
+            num_validation_prints=10,
+            print_intermediate_results = True,
+          save_path="peganov/HM_LSTM/eighth/variables")
 
-
-
-
-model.get_result('peganov/HM_LSTM/'+name_of_run+'/variables',
-                   100,
-                   40000,
-                   20,
-                   0.9)
-folder_name = 'peganov/HM_LSTM/'+name_of_run
-file_name = name_of_run+'.pickle'
-results_GL = model._results
-pickle_dump = {'results_GL': results_GL}
-if not os.path.exists(folder_name):
-    try:
-        os.makedirs(folder_name)
-    except Exception as e:
-        print("Unable create folder '%s'" % folder_name, ':', e)    
-print('Pickling %s.' % (folder_name + '/' + file_name))
-try:
-    with open(folder_name + '/' + file_name, 'wb') as f:
-        pickle.dump(pickle_dump, f, pickle.HIGHEST_PROTOCOL)
-except Exception as e:
-    print('Unable to save data to', file_name, ':', e)
 
 
