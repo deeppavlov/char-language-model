@@ -79,20 +79,20 @@ def check_not_one_byte(text):
     min_character_order_index = 2**16 
     present_characters = [0]*256
     number_of_characters = 0
-    for i in range(len(text)):
-        if ord(text[i]) > 255:
+    for char in text:
+        if ord(char) > 255:
             not_one_byte_counter += 1 
-        if len(present_characters) <  ord(text[i]):
-            present_characters.extend([0]*(ord(text[i]) - len(present_characters) + 1))
-            present_characters[ord(text[i])] = 1
+        if len(present_characters) <=  ord(char):
+            present_characters.extend([0]*(ord(char) - len(present_characters) + 1))
+            present_characters[ord(char)] = 1
             number_of_characters += 1
-        elif present_characters[ord(text[i])] == 0:
-            present_characters[ord(text[i])] = 1
+        elif present_characters[ord(char)] == 0:
+            present_characters[ord(char)] = 1
             number_of_characters += 1
-        if ord(text[i]) > max_character_order_index:
-            max_character_order_index = ord(text[i])
-        if ord(text[i]) < min_character_order_index:
-            min_character_order_index = ord(text[i])
+        if ord(char) > max_character_order_index:
+            max_character_order_index = ord(char)
+        if ord(char) < min_character_order_index:
+            min_character_order_index = ord(char)
     return not_one_byte_counter, min_character_order_index, max_character_order_index, number_of_characters, present_characters
 
 
@@ -413,6 +413,17 @@ class MODEL(object):
         self.create_path(save_path)
         self.saver.save(session, save_path)
 
+    def parse_collection_res(self, res, operation):
+        if operation[1] == 'text':
+            collection_text_res = res
+            collection_operation_text_chars = np.split(collection_text_res, collection_text_res.shape[0])
+            output = u''
+            for collection_operation_text_char in collection_operation_text_chars:
+                output += characters(sample(collection_operation_text_char, self._vocabulary_size), self._vocabulary)[0] 
+        else:
+            output = res
+        return output
+
 
     def simple_run(self,
                    num_averaging_iterations,    # number of percents values used for final averaging
@@ -535,7 +546,7 @@ class MODEL(object):
             log_device_placement=False,                       # passed to tf.ConfigProto
             save_path=None,                                   # path to file which will be used for saving graph. If path does not exist it will be created
             path_to_file_for_saving_prints=None,              # path to file where everything apointed for printing is saved
-            collection_operations=None,
+            collection_operations=None,                       # a list of tuples. Each tuple contains two elements. First is operation name. Second indicates if operation encodes text or not ('text', 'number'). If 'text' before adding to collection numpy array will be transformed to str
             collection_steps=None,
             path_to_file_for_saving_collection=None,          # all add operations results will be added to a dictionary which will pickled
             summarizing_logdir=None,                          # 'summarizing_logdir' is a path to directory for storing summaries
@@ -602,6 +613,7 @@ class MODEL(object):
         with tf.Session(graph=self._graph, config=config) as session:
             if debug:
                 session = tf_debug.LocalCLIDebugWrapperSession(session)
+                session.add_tensor_filter("has_inf_or_nan", tf_debug.has_inf_or_nan)
             session.run(tf.global_variables_initializer())
             choose_where_to_print('Initialized')
             start_time = time.clock()
@@ -676,8 +688,11 @@ class MODEL(object):
                 train_operations_map.append(pointer)
                 pointer += len(summary_dict['summary_tensors'])
                 train_operations_map.append(pointer)
+                #print("summary_dict['summary_tensors']")
                 for tensor_name in summary_dict['summary_tensors']:
+                    #print(tensor_name)
                     exec('train_operations.append(%s)' % tensor_name)
+                #print("summary_dict['summary_tensors'] finished")
             else:
                 train_operations_map.append(None)
                 train_operations_map.append(None)
@@ -686,8 +701,8 @@ class MODEL(object):
             if collection_operations is not None:
                 collection_dictionary = {'step': list()}
                 for collection_operation in collection_operations:
-                    collection_dictionary[collection_operation] = list()
-                    exec('real_to_print_collection.append(%s)' % collection_operation)
+                    collection_dictionary[collection_operation[0]] = list()
+                    exec('real_to_print_collection.append(%s)' % collection_operation[0])
             else:
                 train_operations_map.append(None)
                 train_operations_map.append(None)
@@ -745,7 +760,6 @@ class MODEL(object):
                     summary_res = train_res[train_operations_map[4]:train_operations_map[5]]
                 if collection_operations is not None:
                     collection_res = train_res[train_operations_map[6]:train_operations_map[7]]
-
                 if collection_operations is not None:
                     if step in collection_steps:
                         print_counter = 0
@@ -758,18 +772,18 @@ class MODEL(object):
                                     for list_idx in range(len(real_operation)):
                                         storage_item = list()
                                         for tensor_idx in range(len(real_operation[list_idx])):
-                                            storage_item.append(collection_res[print_counter])
+                                            storage_item.append(self.parse_collection_res(collection_res[print_counter], collection_operation))
                                             print_counter += 1
                                         storage.append(storage_item)
-                                    collection_dictionary[collection_operation].append(storage)
+                                    collection_dictionary[collection_operation[0]].append(storage)
                                 else:
                                     storage = list()
                                     for tensor_idx in range(len(real_operation)):
-                                        storage.append(collection_res[print_counter])
+                                        storage_item.append(self.parse_collection_res(collection_res[print_counter], collection_operation))
                                         print_counter += 1
-                                    collection_dictionary[collection_operation].append(storage)
+                                    collection_dictionary[collection_operation[0]].append(storage)
                             else:
-                                collection_dictionary[collection_operation].append(collection_res[print_counter])
+                                collection_dictionary[collection_operation[0]].append(self.parse_collection_res(collection_res[print_counter], collection_operation))
                                 print_counter += 1
                     
                 # print('len(add_train_res) = %s' % len(add_train_res))
@@ -995,8 +1009,9 @@ class MODEL(object):
             finish_time = time.clock()
             if save_path is not None:
                 self.save_graph(session, save_path)
-        path_to_folder, pickle_name = self.split_to_path_name(path_to_file_for_saving_collection)
-        self.pickle(path_to_folder, pickle_name, collection_dictionary)
+        if path_to_file_for_saving_collection is not None:
+            path_to_folder, pickle_name = self.split_to_path_name(path_to_file_for_saving_collection)
+            self.pickle(path_to_folder, pickle_name, collection_dictionary)
         self._last_num_steps = step
         run_result = {"metadata": list(), "data": data_for_plot, "time": (finish_time - start_time)}
 

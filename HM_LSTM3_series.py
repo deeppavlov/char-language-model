@@ -44,8 +44,6 @@ from model_module import sample_distribution
 from model_module import MODEL
 
 
-
-
 version = sys.version_info[0]
 
 
@@ -84,6 +82,7 @@ else:
     text = f.read().decode('utf8')
     f.close() 
     (not_one_byte_counter, min_character_order_index, max_character_order_index, number_of_characters, present_characters_indices) = check_not_one_byte(text)
+ 
 
 
 # In[3]:
@@ -105,7 +104,7 @@ train_size = len(train_text)
 
 #different
 offset = 20000
-valid_size = 20000
+valid_size = 500
 valid_text = text[offset:offset+valid_size]
 train_text = text[offset+valid_size:]
 train_size = len(train_text)
@@ -136,6 +135,7 @@ for i in range(vocabulary_size):
     string_vocabulary += vocabulary[i]
 
 
+
 # In[6]:
 
 
@@ -153,9 +153,11 @@ valid_batches_test = BatchGenerator(valid_text_1,
                                     characters_positions_in_vocabulary,
                                     1)
 
-
-# In[7]:
-
+from tensorflow.python.framework import dtypes
+from tensorflow.python.ops import array_ops
+from tensorflow.python.ops import gen_array_ops
+from tensorflow.python.ops import gen_math_ops
+from tensorflow.python.ops import math_ops
 
 # This class implements hierarchical LSTM described in the paper https://arxiv.org/pdf/1609.01704.pdf
 # All variables names and formula indices are taken from mentioned article
@@ -199,27 +201,40 @@ class HM_LSTM(MODEL):
             #       It was used for broadcasting activation along vectors in same batches
 
             # following operation computes a product z^l_{t-1} x h^{l+1}_{t-1} for formula (6)
-            top_down_prepaired = tf.transpose(tf.multiply(tf.transpose(state[2],
-                                                                       name="transposed_state2_in_top_down_prepaired"),
-                                                          tf.transpose(top_down,
-                                                                       name="transposed_top_down_in_top_down_prepaired"),
-                                                          name="multiply_in_top_down_prepaired"),
+            tr_state2 = tf.transpose(state[2],
+                                     name="transposed_state2_in_top_down_prepaired")
+            tr_top_down = tf.transpose(top_down,
+                                       name="transposed_top_down_in_top_down_prepaired")
+            with self._graph.gradient_override_map({"Mul": self.gradient_name2}):
+                multiply_in_top_down_prepaired = tf.multiply(tr_state2,
+                                                             tr_top_down,
+                                                             name="multiply_in_top_down_prepaired")
+            top_down_prepaired = tf.transpose(multiply_in_top_down_prepaired,
                                               name="top_down_prepaired")
 
             # this one cumputes a product z^{l-1}_t x h^{l-1}_t for formula (7)
-            bottom_up_prepaired = tf.transpose(tf.multiply(tf.transpose(boundary_state_down,
-                                                                        name="transposed_boundary_state_down_in_bottom_down_prepaired"),
-                                                           tf.transpose(bottom_up,
-                                                                        name="transposed_bottom_up_in_bottom_up_prepaired"),
-                                                           name="multiply_in_bottom_up_prepaired"),
+            tr_boundary_state_down = tf.transpose(boundary_state_down,
+                                                  name="transposed_boundary_state_down_in_bottom_down_prepaired")
+            tr_bottom_up = tf.transpose(bottom_up,
+                                        name="transposed_bottom_up_in_bottom_up_prepaired")
+            with self._graph.gradient_override_map({"Mul": self.gradient_name2}):
+                multiply_in_bottom_up_prepaired = tf.multiply(tr_boundary_state_down,
+                                                              tr_bottom_up,
+                                                              name="multiply_in_bottom_up_prepaired")
+            bottom_up_prepaired = tf.transpose(multiply_in_bottom_up_prepaired,
                                                name="bottom_up_prepaired")
             
+            # following implements formula (8). Missing (1-z) is added
             boundary_state_reversed = tf.subtract(one, state[2], name="boundary_state_reversed")
-            state0_prepaired = tf.transpose(tf.multiply(tf.transpose(boundary_state_reversed,
-                                                                     name="transposed_boundary_state_reversed_in_state0_prepaired"),
-                                                        tf.transpose(state[0],
-                                                                     name="transposed_state0_state0_prepaired"),
-                                                        name="multiply_in_state0_prepaired"),
+            tr_boundary_state_reversed = tf.transpose(boundary_state_reversed,
+                                                      name="transposed_boundary_state_reversed_in_state0_prepaired")
+            tr_state0 = tf.transpose(state[0],
+                                     name="transposed_state0_state0_prepaired")
+            with self._graph.gradient_override_map({"Mul": self.gradient_name2}):
+                multiply_in_state0_prepaired = tf.multiply(tr_boundary_state_reversed,
+                                                           tr_state0,
+                                                           name="multiply_in_state0_prepaired")
+            state0_prepaired = tf.transpose(multiply_in_state0_prepaired,
                                             name="state0_prepaired")
             
 
@@ -449,7 +464,7 @@ class HM_LSTM(MODEL):
                                X):
         # Elementwise calculates step function 
         # During backward pass works as hard sigm
-        with self._graph.gradient_override_map({"Sign": self.gradient_name}):
+        with self._graph.gradient_override_map({"Sign": self.gradient_name1}):
             X = tf.sign(X, name="sign_func_in_compute_boundary")
         """X = tf.sign(X)"""
         X = tf.divide(tf.add(X,
@@ -692,7 +707,8 @@ class HM_LSTM(MODEL):
         self._output_embedding_size = output_embedding_size
         self._init_parameter = init_parameter
         self._matr_init_parameter = matr_init_parameter
-        self.gradient_name = 'HardSigmoid' + override_appendix
+        self.gradient_name1 = 'HardSigmoid' + override_appendix
+        self.gradient_name2 = 'NewMul' + override_appendix
         self._indices = {"batch_size": 0,
                          "num_unrollings": 1,
                          "num_layers": 2,
@@ -843,7 +859,7 @@ class HM_LSTM(MODEL):
                                                name="to_float_in_slope_init") * tf.constant(self._slope_growth, name="slope_growth"),
                                    name="slope")
                     
-                    @tf.RegisterGradient(self.gradient_name)
+                    @tf.RegisterGradient(self.gradient_name1)
                     def hard_sigm_grad(op,                # op is operation for which gradient is computed
                                        grad):             # loss partial gradients with respect to op outputs
                         # This function is added for implememting straight-through estimator as described in
@@ -865,6 +881,26 @@ class HM_LSTM(MODEL):
                                                        mask,
                                                        name="grad_mask_multiply_in_hard_sigm"),
                                            name="hard_sigm_grad_output")
+                    @tf.RegisterGradient(self.gradient_name2)
+                    def new_mul_grad(op,                # op is operation for which gradient is computed
+                                     grad):             # loss partial gradients with respect to op outputs
+                        """The gradient of scalar multiplication."""
+                        x = op.inputs[0]
+                        y = op.inputs[1]
+                        assert x.dtype.base_dtype == y.dtype.base_dtype, (x.dtype, " vs. ", y.dtype)
+                        sx = array_ops.shape(x)
+                        sy = array_ops.shape(y)
+                        rx, ry = gen_array_ops._broadcast_gradient_args(sx, sy)
+                        x = math_ops.conj(x)
+                        y = math_ops.conj(y)
+                        not_modified_1 = array_ops.reshape(math_ops.reduce_sum(grad * y, rx), sx)
+                        not_modified_2 = array_ops.reshape(math_ops.reduce_sum(x * grad, ry), sy)
+                        tr_not_modified_2 = array_ops.transpose(not_modified_2)
+                        tr_x = array_ops.transpose(x)
+                        modified_1 = math_ops.multiply(not_modified_1, x)
+                        modified_2 = array_ops.transpose(math_ops.multiply(tr_x, tr_not_modified_2))
+                        return (modified_1,
+                                modified_2)
 
                     embedded_inputs = self.embedding_module(train_inputs)
                     state, hidden_states, train_helper = self.RNN_module(embedded_inputs, saved_state)
@@ -1138,79 +1174,80 @@ class HM_LSTM(MODEL):
                     
             else:        
                 _ = self._sample_prediction.eval({self._sample_input: b[0]})
-        return text_list, boundaries_list
+        return text_list, boundaries_list 
 
 
-# In[8]:
-
-
-model = HM_LSTM(64,
-                 vocabulary,
-                 characters_positions_in_vocabulary,
-                 100,
-                 3,
-                 [512, 512, 512],
-                 1.,               # init_slope
-                 0.1,                  # slope_growth
-                 1000,
-                 train_text,
-                 valid_text,
-                init_parameter=0.000001,
-                 matr_init_parameter=100000)
-
-
-# In[9]:
-
-
-logdir = "HM_LSTM/logging/first_summary_log"
-model.run(1,                # number of times learning_rate is decreased
-          0.9,              # a factor by which learning_rate is decreased
-            100,            # each 'train_frequency' steps loss and percent correctly predicted letters is calculated
-            100,             # minimum number of times loss and percent correctly predicted letters are calculated while learning (train points)
-            3,              # if during half total spent time loss decreased by less than 'stop_percent' percents learning process is stopped
-            1,              # when train point is obtained validation may be performed
-            3,             # when train point percent is calculated results got on averaging_number chunks are averaged
-          fixed_number_of_steps=10001,
-            add_operations=['self.train_hard_sigm_arg'],
-          add_text_operations=['self.train_input_print'],
-           print_steps = [5000, 10000],
-            validation_add_operations = ['self.sigm_arg'],
-            num_validation_prints=100,
-          validation_example_length=100, 
-            print_intermediate_results = True,
-            collection_operations=['self.train_input_print', 'self.train_hard_sigm_arg'],
-           collection_steps=[5000, 10000],
-            path_to_file_for_saving_collection='peganov/HM_LSTM/plotting_check/intermediate_plotting_check.pickle',          # all add operations results will be added to a dictionary which will pickled
-          path_to_file_for_saving_prints='peganov/HM_LSTM/plotting_check/plotting_check.txt',
-           save_path="peganov/HM_LSTM/plotting_check/variables")
-results_GL = list(model._results)
-text_list, boundary_list = model.run_for_analitics(model.get_boundaries,
-                                                'peganov/HM_LSTM/plotting_check/variables',
+#init_parameters = [1e-5, 1e-6, 1e-7, 1e-8]
+#matr_init_parameters = [50, 100, 1000, 10000, 100000]
+init_parameters = [1e-5]
+matr_init_parameters = [50]
+num_nodes = 128
+init_slope = .5
+slope_growth = .5
+slope_half_life = 1000
+results_GL = list()
+run_idx = 0
+model_type = 'HM_LSTM3'
+folder_name = 'nn%sis%ssg%sshl%s' % (num_nodes, init_slope, slope_growth, slope_half_life)
+for init_parameter_value in init_parameters:
+    print(' '*10, "init parameter: ", init_parameter_value)
+    for matr_init_parameter_value in matr_init_parameters:
+        print(' '*5, "matr init parameter: ", matr_init_parameter_value)
+        name_of_run = 'ip%s_imp%s' % (init_parameter_value, matr_init_parameter_value)
+        folder_name = 'nn%sis%ssg%sshl%s' % (num_nodes, init_slope, slope_growth, slope_half_life)
+        model = HM_LSTM(64,
+                                 vocabulary,
+                                 characters_positions_in_vocabulary,
+                                 30,
+                                 3,
+                                 [num_nodes, num_nodes, num_nodes],
+                                 init_slope,
+                                 slope_growth,
+                                  slope_half_life,
+                                 train_text,
+                                 valid_text,
+                        init_parameter=init_parameter_value,
+                        matr_init_parameter=matr_init_parameter_value,
+                        override_appendix=str(run_idx))
+        model.simple_run(100,                # number of percents values used for final averaging
+                         'peganov/HM_LSTM/'+ model_type + '/' + folder_name +'/'+name_of_run+'/variables',
+                         100,              # minimum number of learning iterations
+                         20000,              # period of checking loss function. It is used defining if learning should be stopped
+                         20000,              # learning has a chance to be stopped after every block of steps
+                         10,                 # number of times 'learning_rate' is multiplied on 'decay'
+                         .8,                 # a factor by which the learning rate decreases each 'half_life'
+                         3,                  # if fixed_num_steps=False this parameter defines when the learning process should be stopped. If during half the total learning time loss function decreased less than by 'stop_percent' percents the learning would be stopped
+                         fixed_num_steps=True)
+        text_list, boundary_list = model.run_for_analitics(model.get_boundaries,
+                                                'peganov/HM_LSTM/'+ model_type + '/' + folder_name +'/'+name_of_run+'/variables',
                                                 [10, 75, None])
-
-for i in range(10):
-    text_boundaries_plot(text_list[i],
+        for i in range(4):
+            text_boundaries_plot(text_list[i],
                             boundary_list[i],
                             'boundaries by layer',
-                            ['peganov', 'HM_LSTM', 'plotting_check', 'plots'],
-                            'check#%s' % i,
+                            ['peganov', 'HM_LSTM', model_type, folder_name, name_of_run, 'plots'],
+                            name_of_run+'#%s' % i,
                             show=False)
-
-
-folder_name = 'peganov/HM_LSTM/plotting_check'
-file_name = 'plot_debug_result.pickle'
-force = True
+        results_GL.append(model._results[-1])
+        run_idx += 1
+        model.destroy()
+        del model
+        gc.collect()
+pickle_file_name = folder_name
+folder_name = 'peganov/HM_LSTM/' + model_type + '/' +pickle_file_name
+file_name = pickle_file_name+'.pickle'
 pickle_dump = {'results_GL': results_GL}
 if not os.path.exists(folder_name):
     try:
         os.makedirs(folder_name)
     except Exception as e:
         print("Unable create folder '%s'" % folder_name, ':', e)    
-print('Pickling %s' % (folder_name + '/' + file_name))
+print('Pickling %s.' % (folder_name + '/' + file_name))
 try:
     with open(folder_name + '/' + file_name, 'wb') as f:
         pickle.dump(pickle_dump, f, pickle.HIGHEST_PROTOCOL)
 except Exception as e:
     print('Unable to save data to', file_name, ':', e)
+
 
 
