@@ -439,8 +439,8 @@ class MODEL(object):
                    half_life_fixed=False,
                    fixed_num_steps=False,
                    gpu_memory=None):
-        config = tf.ConfigProto(allow_soft_placement=allow_soft_placement,
-                                log_device_placement=log_device_placement)
+        config = tf.ConfigProto(allow_soft_placement=False,
+                                log_device_placement=False)
         if gpu_memory is not None:
             config.gpu_options.per_process_gpu_memory_fraction = gpu_memory
         
