@@ -437,8 +437,11 @@ class MODEL(object):
                    save_steps=None,            # steps at which model is saved into save_path + str(save_steps[i])
                    optional_feed_dict=None,
                    half_life_fixed=False,
-                   fixed_num_steps=False):
-        config = tf.ConfigProto(allow_soft_placement=False, log_device_placement=False)
+                   fixed_num_steps=False,
+                   gpu_memory=0.95):
+        config = tf.ConfigProto(gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=gpu_memory),
+                                allow_soft_placement=False,
+                                log_device_placement=False)
         
         if not half_life_fixed and (self._last_num_steps > min_num_steps):
             min_num_steps = self._last_num_steps
@@ -550,9 +553,12 @@ class MODEL(object):
             collection_steps=None,
             path_to_file_for_saving_collection=None,          # all add operations results will be added to a dictionary which will pickled
             summarizing_logdir=None,                          # 'summarizing_logdir' is a path to directory for storing summaries
-            summary_dict=None):                               # a dictionary containing 'summaries_collection_frequency', 'summary_tensors' 
+            summary_dict=None,                                # a dictionary containing 'summaries_collection_frequency', 'summary_tensors'
                                                               # every 'summaries_collection_frequency'-th step summary is collected 
                                                               # 'summary_tensors' is a list of collected summary tensors
+            summary_graph=True,                               # defines if graph should be added to the summary                        
+            gpu_memory=0.95):
+                                                              
   
         BPC_coef = 1./np.log(2)
 
@@ -609,7 +615,9 @@ class MODEL(object):
         
         losses = [0.]
 
-        config = tf.ConfigProto(allow_soft_placement=allow_soft_placement, log_device_placement=log_device_placement)
+        config = tf.ConfigProto(gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=gpu_memory),
+                                allow_soft_placement=allow_soft_placement,
+                                log_device_placement=log_device_placement)
         with tf.Session(graph=self._graph, config=config) as session:
             if debug:
                 session = tf_debug.LocalCLIDebugWrapperSession(session)
@@ -679,7 +687,7 @@ class MODEL(object):
                 train_operations_map.append(None)
                 train_operations_map.append(None)
 
-            if summarizing_logdir is not None:
+            if summary_graph is not None:
                 writer = tf.summary.FileWriter(summarizing_logdir,
                                                graph=self._graph) 
             

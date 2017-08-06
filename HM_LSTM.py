@@ -86,21 +86,6 @@ else:
     (not_one_byte_counter, min_character_order_index, max_character_order_index, number_of_characters, present_characters_indices) = check_not_one_byte(text)
 
 
-# In[3]:
-
-
-#different
-offset_1 = 0
-offset_2 = 4100
-valid_size_1 = 4000
-valid_size_2 = 4000
-valid_text_1 = text[offset_1:offset_1+valid_size_1]
-valid_text_2 = text[offset_2:offset_2+valid_size_2]
-train_text = text[offset_2+valid_size_2:]
-train_size = len(train_text)
-
-
-# In[4]:
 
 
 #different
@@ -170,12 +155,12 @@ class HM_LSTM(MODEL):
                 dim,
                 appendix):
         with tf.name_scope('L2_norm'+appendix):
-            square = tf.square(tensor, name="square_in_L2_norm"+appendix)
+            square = tf.square(tensor, name="square_in_L2_norm")
             reduced = tf.reduce_mean(square,
                                      dim,
                                      keep_dims=True,
-                                     name="reduce_mean_in_L2_norm"+appendix)
-            return tf.sqrt(reduced, name="L2_norm"+appendix)
+                                     name="reduce_mean_in_L2_norm")
+            return tf.sqrt(reduced, name="L2_norm")
     
     
     def not_last_layer(self,
