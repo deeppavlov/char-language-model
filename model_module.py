@@ -438,10 +438,11 @@ class MODEL(object):
                    optional_feed_dict=None,
                    half_life_fixed=False,
                    fixed_num_steps=False,
-                   gpu_memory=0.95):
-        config = tf.ConfigProto(gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=gpu_memory),
-                                allow_soft_placement=False,
-                                log_device_placement=False)
+                   gpu_memory=None):
+        config = tf.ConfigProto(allow_soft_placement=allow_soft_placement,
+                                log_device_placement=log_device_placement)
+        if gpu_memory is not None:
+            config.gpu_options.per_process_gpu_memory_fraction = gpu_memory
         
         if not half_life_fixed and (self._last_num_steps > min_num_steps):
             min_num_steps = self._last_num_steps
@@ -557,7 +558,7 @@ class MODEL(object):
                                                               # every 'summaries_collection_frequency'-th step summary is collected 
                                                               # 'summary_tensors' is a list of collected summary tensors
             summary_graph=True,                               # defines if graph should be added to the summary                        
-            gpu_memory=0.95):
+            gpu_memory=None):
                                                               
   
         BPC_coef = 1./np.log(2)
@@ -615,9 +616,10 @@ class MODEL(object):
         
         losses = [0.]
 
-        config = tf.ConfigProto(gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=gpu_memory),
-                                allow_soft_placement=allow_soft_placement,
+        config = tf.ConfigProto(allow_soft_placement=allow_soft_placement,
                                 log_device_placement=log_device_placement)
+        if gpu_memory is not None:
+            config.gpu_options.per_process_gpu_memory_fraction = gpu_memory
         with tf.Session(graph=self._graph, config=config) as session:
             if debug:
                 session = tf_debug.LocalCLIDebugWrapperSession(session)
