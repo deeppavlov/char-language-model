@@ -196,7 +196,7 @@ logdir = "peganov/HM_LSTM3/effectiveness_clean/logging/first_log"
 model.run(20,                # number of times learning_rate is decreased
           0.9,              # a factor by which learning_rate is decreased
             100,            # each 'train_frequency' steps loss and percent correctly predicted letters is calculated
-            10,             # minimum number of times loss and percent correctly predicted letters are calculated while learning (train points)
+            500,             # minimum number of times loss and percent correctly predicted letters are calculated while learning (train points)
             3,              # if during half total spent time loss decreased by less than 'stop_percent' percents learning process is stopped
             1,              # when train point is obtained validation may be performed
             3,             # when train point percent is calculated results got on averaging_number chunks are averaged
