@@ -1024,7 +1024,8 @@ class HM_LSTM(MODEL):
                 self.control_dictionary[L2_hard_sigm_template % layer_idx] = tf.summary.scalar(L2_hard_sigm_template % layer_idx +'_sum', 
                                                                                                tf.reshape(self.L2_hard_sigm_arg[layer_idx],
                                                                                                           [],
-                                                                                                          name='reshaping_L2_hard_sigm_%s'%layer_idx))            
+                                                                                                          name='reshaping_L2_hard_sigm_%s'%layer_idx)) 
+            self.control_dictionary['loss'] = tf.summary.scalar('loss_sum', self._loss)           
             """saver"""
             self.saver = tf.train.Saver(max_to_keep=None)        
                            
