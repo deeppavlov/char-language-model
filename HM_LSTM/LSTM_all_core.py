@@ -1,155 +1,22 @@
-
-# coding: utf-8
-
-# In[1]:
-
-
-# These are all the modules we'll be using later. Make sure you can import them
-# before proceeding further.
 from __future__ import print_function
 import numpy as np
 import math
-import random
-import string
 import tensorflow as tf
-import tensorflow.python.ops.rnn_cell 
-from tensorflow.python.framework import registry
-import zipfile
 from six.moves import range
 from six.moves.urllib.request import urlretrieve
-import collections
-import matplotlib.pyplot as plt
-import codecs
-import time
-import os
-import gc
-from six.moves import cPickle as pickle
 import sys
-
-from plot_module import text_plot
-from plot_module import structure_vocabulary_plots
-from plot_module import text_boundaries_plot
-from plot_module import ComparePlots
-
-from model_module import maybe_download
-from model_module import read_data
-from model_module import check_not_one_byte
-from model_module import id2char
-from model_module import char2id
+import os
+if not os.path.isfile('model_module.py') or not os.path.isfile('plot_module.py'):
+    current_path = os.path.dirname(os.path.abspath('__file__'))
+    additional_path = '/'.join(current_path.split('/')[:-1])
+    sys.path.append(additional_path)
+from model_module import MODEL
 from model_module import BatchGenerator
 from model_module import characters
-from model_module import batches2string
-from model_module import logprob
-from model_module import sample_distribution
-from model_module import MODEL
 
 version = sys.version_info[0]
 
 
-# In[2]:
-
-
-if not os.path.exists('enwik8_filtered'):
-    if not os.path.exists('enwik8'):
-        filename = maybe_download('enwik8.zip', 36445475)
-    full_text = read_data(filename)
-    new_text = u""
-    new_text_list = list()
-    for i in range(len(full_text)):
-        if (i+1) % 10000000 == 0:
-            print("%s characters are filtered" % i)
-        if ord(full_text[i]) < 256:
-            new_text_list.append(full_text[i])
-    text = new_text.join(new_text_list)
-    del new_text_list
-    del new_text
-    del full_text
-
-    (not_one_byte_counter, min_character_order_index, max_character_order_index, number_of_characters, present_characters_indices) = check_not_one_byte(text)
-
-    print("number of not one byte characters: ", not_one_byte_counter) 
-    print("min order index: ", min_character_order_index)
-    print("max order index: ", max_character_order_index)
-    print("total number of characters: ", number_of_characters)
-    
-    f = open('enwik8_filtered', 'wb')
-    f.write(text.encode('utf8'))
-    f.close()
-    
-else:
-    f = open('enwik8_filtered', 'rb')
-    text = f.read().decode('utf8')
-    f.close() 
-    (not_one_byte_counter, min_character_order_index, max_character_order_index, number_of_characters, present_characters_indices) = check_not_one_byte(text)
- 
-
-
-# In[3]:
-
-
-#different
-offset_1 = 0
-offset_2 = 4100
-valid_size_1 = 4000
-valid_size_2 = 4000
-valid_text_1 = text[offset_1:offset_1+valid_size_1]
-valid_text_2 = text[offset_2:offset_2+valid_size_2]
-train_text = text[offset_2+valid_size_2:]
-train_size = len(train_text)
-
-
-# In[4]:
-
-
-#different
-offset = 20000
-valid_size = 500
-valid_text = text[offset:offset+valid_size]
-train_text = text[offset+valid_size:]
-train_size = len(train_text)
-
-
-# In[5]:
-
-
-vocabulary_size = number_of_characters
-vocabulary = list()
-characters_positions_in_vocabulary = list()
-
-character_position_in_vocabulary = 0
-for i in range(256):
-    if present_characters_indices[i]:
-        if version >= 3:
-            vocabulary.append(chr(i))
-        else:
-            vocabulary.append(unichr(i))
-        characters_positions_in_vocabulary.append(character_position_in_vocabulary)
-        character_position_in_vocabulary += 1
-    else:
-        characters_positions_in_vocabulary.append(-1)
-
-
-string_vocabulary = u""
-for i in range(vocabulary_size):
-    string_vocabulary += vocabulary[i]
-
-
-# In[6]:
-
-
-batch_size_test=64
-num_unrollings_test=10
-
-train_batches_test = BatchGenerator(train_text,
-                                    batch_size_test,
-                                    vocabulary_size,
-                                    characters_positions_in_vocabulary,
-                                    num_unrollings_test)
-valid_batches_test = BatchGenerator(valid_text_1,
-                                    1,
-                                    vocabulary_size,
-                                    characters_positions_in_vocabulary,
-                                    1)
 
 
 # In[19]:
@@ -161,17 +28,6 @@ valid_batches_test = BatchGenerator(valid_text_1,
 # notation A_i stands for A with lower index i
 # notation A^i_j stands for A with upper index i and lower index j
 class LSTM(MODEL):
-        
-    def L2_norm(self,
-                tensor,
-                dim):
-        with tf.name_scope('L2_norm'):
-            square = tf.square(tensor, name="square_in_L2_norm")
-            reduced = tf.reduce_mean(square,
-                                     dim,
-                                     keep_dims=True,
-                                     name="reduce_mean_in_L2_norm")
-            return tf.sqrt(reduced, name="L2_norm")
     
     
     def layer(self,
@@ -324,8 +180,7 @@ class LSTM(MODEL):
                  output_embedding_size=1024,
                  init_parameter=1.,               # init_parameter is used for balancing stddev in matrices initialization
                                                   # and initial learning rate
-                 matr_init_parameter=1000.,
-                 override_appendix=''):
+                 matr_init_parameter=1000.):
         self._results = list()
         self._batch_size = batch_size
         self._vocabulary = vocabulary
@@ -372,10 +227,10 @@ class LSTM(MODEL):
                 self.Biases = list()
                 
                 # tensor name templates for HM_LSTM parameters
-                init_matr_name = "HM_LSTM_matrix_%s_initializer"
-                init_bias_name = "HM_LSTM_bias_%s_initializer" 
-                matr_name = "HM_LSTM_matrix_%s"
-                bias_name = "HM_LSTM_bias_%s"
+                init_matr_name = "LSTM_matrix_%s_initializer"
+                init_bias_name = "LSTM_bias_%s_initializer" 
+                matr_name = "LSTM_matrix_%s"
+                bias_name = "LSTM_bias_%s"
                 
                 self.Matrices.append(tf.Variable(tf.truncated_normal([self._embedding_size + self._num_nodes[0],
                                                                       4 * self._num_nodes[0]],
@@ -589,92 +444,9 @@ class LSTM(MODEL):
         metadata.append(self._output_embedding_size)
         metadata.append(self._init_parameter)
         metadata.append(self._matr_init_parameter)
-        metadata.append('HM_LSTM')
+        metadata.append('LSTM_all')
         return metadata
-  
-    def get_boundaries(self, session, num_strings=10, length=75, start_positions=None):
-        self._reset_sample_state.run()
-        self._valid_batches = BatchGenerator(self._valid_text,
-                                             1,
-                                             self._vocabulary_size,
-                                             self._characters_positions_in_vocabulary,
-                                             1)
-        if start_positions is None:
-            start_positions = list()
-            if self._valid_size / num_strings < length:
-                num_strings = self._valid_size / length
-            for i in range(num_strings):
-                start_positions.append(i* (self._valid_size / num_strings) + self._valid_size / num_strings / 2)
-            while self._valid_size - start_positions[-1] < length:
-                del start_positions[-1]
-        text_list = list()
-        boundaries_list = list()
-        collect_boundaries = False
-        letters_parsed = -1
-        for idx in range(self._valid_size):
-            b = self._valid_batches.next()
-            
-            if idx in start_positions or collect_boundaries: 
-                if letters_parsed == -1:
-                    letters_parsed = 0
-                    text = u""
-                    b_double_list = list()
-                    for _ in range(self._num_layers-1):
-                        b_double_list.append(list())
-                    collect_boundaries = True
-                text += characters(b[0], self._vocabulary)[0]
-                letter_boundaries = self.boundary.eval({self._sample_input: b[0]})
-                for layer_idx, layer_boundaries in enumerate(b_double_list):
-                    layer_boundaries.append(letter_boundaries[layer_idx])
-                letters_parsed += 1
-                if letters_parsed >= length:
-                    collect_boundaries = False
-                    boundaries_list.append(b_double_list)
-                    text_list.append(text)
-                    letters_parsed = -1
-                    
-            _ = self._sample_prediction.eval({self._sample_input: b[0]})
-        return text_list, boundaries_list 
 
-init_parameter_value = 1e-6
-matr_init_parameter_value = 100000
-
-model = LSTM(53,
-                 vocabulary,
-                 characters_positions_in_vocabulary,
-                 30,
-                 1,
-                 [512],
-                 train_text,
-                 valid_text,
-                        init_parameter=init_parameter_value,
-                        matr_init_parameter=matr_init_parameter_value)
-
-model.simple_run(100,                # number of percents values used for final averaging
-                         'peganov/LSTM_all/ns10000nl1nn512nu30hl1000dc0.8/variables',
-                         100,              # minimum number of learning iterations
-                         20000,              # period of checking loss function. It is used defining if learning should be stopped
-                         20000,              # learning has a chance to be stopped after every block of steps
-                         10,                 # number of times 'learning_rate' is multiplied on 'decay'
-                         .8,                 # a factor by which the learning rate decreases each 'half_life'
-                         3,                  # if fixed_num_steps=False this parameter defines when the learning process should be stopped. If during half the total learning time loss function decreased less than by 'stop_percent' percents the learning would be stopped
-                         fixed_num_steps=True)
-
-results_GL = model._results
-file_name = 'ns10000nl1nn512nu30hl1000dc0.8.pickle'
-folder_name = 'peganov/LSTM_all/ns10000nl1nn512nu30hl1000dc0.8'
-pickle_dump = {'results_GL': results_GL}
-if not os.path.exists(folder_name):
-    try:
-        os.makedirs(folder_name)
-    except Exception as e:
-        print("Unable create folder '%s'" % folder_name, ':', e)    
-print('Pickling %s.' % (folder_name + '/' + file_name))
-try:
-    with open(folder_name + '/' + file_name, 'wb') as f:
-        pickle.dump(pickle_dump, f, pickle.HIGHEST_PROTOCOL)
-except Exception as e:
-    print('Unable to save data to', file_name, ':', e)
 
 
 
