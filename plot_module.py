@@ -114,6 +114,8 @@ class ComparePlots(object):
             return results[result_number]['metadata'][indices["type"]] + ("_%s" % results[result_number]['metadata'][indices["num_layers"]]) 
         elif results[result_number]['metadata'][indices["type"]] == 'HM_LSTM2':     
             return results[result_number]['metadata'][indices["type"]] + ("_%s" % results[result_number]['metadata'][indices["num_layers"]]) 
+        elif results[result_number]['metadata'][indices["type"]] == 'LSTM_all':     
+            return results[result_number]['metadata'][indices["type"]] + ("_%s" % results[result_number]['metadata'][indices["num_layers"]])
         else:
             print("Unknown network type: %s" % results[result_number]['metadata'][indices["type"]])
             return 0

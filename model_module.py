@@ -830,8 +830,9 @@ class MODEL(object):
 
                 # adding summaries
                 if summary_dict is not None: 
-                    for res in summary_res:
-                        writer.add_summary(res, step)
+                    if step % summary_dict['summaries_collection_frequency'] == 0:
+                        for res in summary_res:
+                            writer.add_summary(res, step)
         
                 mean_loss += l
                 if ((step - (step // train_frequency) * train_frequency + 1) % averaging_step == 0) and average_summing_started:

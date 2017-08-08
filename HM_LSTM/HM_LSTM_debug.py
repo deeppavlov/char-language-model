@@ -24,7 +24,11 @@ import os
 import gc
 from six.moves import cPickle as pickle
 import sys
-
+if not os.path.isfile('model_module.py') or not os.path.isfile('plot_module.py'):
+    current_path = os.path.dirname(os.path.abspath('__file__'))
+    additional_path = '/'.join(current_path.split('/')[:-1])
+    print(additional_path)
+    sys.path.append(additional_path)
 from plot_module import text_plot
 from plot_module import structure_vocabulary_plots
 from plot_module import text_boundaries_plot
