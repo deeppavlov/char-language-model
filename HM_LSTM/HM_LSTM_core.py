@@ -978,24 +978,24 @@ class HM_LSTM(MODEL):
                                                                           norm)
                     #print(name, ': ', norm.get_shape().as_list())
             forget_template = 'self.L2_forget_gate[%s]'
+            flush_fractions_template = 'self.flush_fractions[%s]'
+            L2_hard_sigm_template = 'self.L2_hard_sigm_arg[%s]'
             for layer_idx in range(self._num_layers):
                 self.control_dictionary[forget_template % layer_idx] = tf.summary.scalar(forget_template % layer_idx +'_sum', 
                                                                                          self.L2_forget_gate[layer_idx])
+            for layer_idx in range(self._num_layers-1):
+                self.control_dictionary[flush_fractions_template % layer_idx] = tf.summary.scalar(flush_fractions_template % layer_idx +'_sum', 
+                                                                                                  tf.reshape(self.flush_fractions[layer_idx],
+                                                                                                             [],
+                                                                                                             name='reshaping_flush_fractions_%s'%layer_idx))
+                self.control_dictionary[L2_hard_sigm_template % layer_idx] = tf.summary.scalar(L2_hard_sigm_template % layer_idx +'_sum', 
+                                                                                               tf.reshape(self.L2_hard_sigm_arg[layer_idx],
+                                                                                                          [],
+                                                                                                          name='reshaping_L2_hard_sigm_%s'%layer_idx)) 
+            self.control_dictionary['loss'] = tf.summary.scalar('loss_sum', self._loss)
             """saver"""
             self.saver = tf.train.Saver(max_to_keep=None)
-            
-    def reinit(self,
-               init_slope,
-               slope_growth,
-               slope_half_life,
-               init_parameter,               # init_parameter is used for balancing stddev in matrices initialization
-                                                  # and initial learning rate
-               matr_init_parameter):
-        self._init_slope = init_slope
-        self._slope_half_life = slope_half_life
-        self._slope_growth = slope_growth
-        self._init_parameter = init_parameter
-        self._matr_init_parameter = matr_init_parameter        
+       
                            
                         
     

@@ -110,7 +110,7 @@ else:
 
 #different
 offset = 20000
-valid_size = 500
+valid_size = 10000
 valid_text = text[offset:offset+valid_size]
 train_text = text[offset+valid_size:]
 train_size = len(train_text)
@@ -151,16 +151,16 @@ for i in range(vocabulary_size):
 model = HM_LSTM(64,
                  vocabulary,
                  characters_positions_in_vocabulary,
-                 10,
+                 100,
                  3,
-                 [56, 56, 56],
+                 [256, 256, 256],
                  1.,               # init_slope
                  0.1,                  # slope_growth
                  1000,
                  train_text,
                  valid_text,
-                init_parameter=1e-7,
-                 matr_init_parameter=10000)
+                init_parameter=1e-6,
+                 matr_init_parameter=100000)
 
 
 # In[9]:
@@ -177,7 +177,9 @@ summary_dict = {'summaries_collection_frequency': 100,
                                     "self.control_dictionary['output_embedding_weights']",
                                     "self.control_dictionary['output_embedding_bias']",
                                     "self.control_dictionary['output_weights']",
-                                    "self.control_dictionary['output_bias']"]}
+                                    "self.control_dictionary['output_bias']",
+                                    "self.control_dictionary['loss']"]}
+
 
 saved_state_templ = "'train_1_saved_state_layer%s_number%s'"
 
@@ -186,48 +188,47 @@ for i in range(model._num_layers):
         summary_dict['summary_tensors'].append('self.control_dictionary[' + saved_state_templ % (i, j) + ']')
 for layer_idx in range(model._num_layers):
     summary_dict['summary_tensors'].append("self.control_dictionary['self.L2_forget_gate[%s]']"%layer_idx)
+for layer_idx in range(model._num_layers-1):
+    summary_dict['summary_tensors'].append("self.control_dictionary['self.flush_fractions[%s]']"%layer_idx)
+    summary_dict['summary_tensors'].append("self.control_dictionary['self.L2_hard_sigm_arg[%s]']"%layer_idx)
 
-
-logdir = "peganov/HM_LSTM/track_nan/logging/first_log"
-model.run(1,                # number of times learning_rate is decreased
+logdir = "peganov/HM_LSTM3/effectiveness_clean/logging/first_log"
+model.run(20,                # number of times learning_rate is decreased
           0.9,              # a factor by which learning_rate is decreased
             100,            # each 'train_frequency' steps loss and percent correctly predicted letters is calculated
             10,             # minimum number of times loss and percent correctly predicted letters are calculated while learning (train points)
             3,              # if during half total spent time loss decreased by less than 'stop_percent' percents learning process is stopped
             1,              # when train point is obtained validation may be performed
             3,             # when train point percent is calculated results got on averaging_number chunks are averaged
-          fixed_number_of_steps=101,
+          fixed_number_of_steps=50001,
             add_operations=['self.train_hard_sigm_arg'],
           add_text_operations=['self.train_input_print'],
            print_steps = [5000, 10000, 15000, 20000, 25000, 30000, 35000, 40000, 45000, 50000],
             validation_add_operations = ['self.sigm_arg'],
-            num_validation_prints=100,
-          validation_example_length=100, 
+            num_validation_prints=10,
+          validation_example_length=40, 
            #debug=True,
             print_intermediate_results = True,
-            collection_operations=[('self.train_input_print', 'text'), ('self.train_hard_sigm_arg', 'number')],
-           collection_steps=[5000, 10000, 15000, 20000, 25000, 30000, 35000, 40000, 45000, 50000],
-
-            path_to_file_for_saving_collection='peganov/HM_LSTM/track_nan/track_nan.pickle',          # all add operations results will be added to a dictionary which will pickled
-          path_to_file_for_saving_prints='peganov/HM_LSTM/track_nan/track_nan.txt',
-           save_path="peganov/HM_LSTM/track_nan/variables",
+          path_to_file_for_saving_prints='peganov/HM_LSTM3/effectiveness_clean/effectiveness_clean.txt',
+           save_path="peganov/HM_LSTM3/effectiveness_clean/variables",
              summarizing_logdir=logdir,
-            summary_dict=summary_dict)
+            summary_dict=summary_dict,
+           gpu_memory=0.5)
 results_GL = list(model._results)
 text_list, boundary_list = model.run_for_analitics(model.get_boundaries,
-                                                'peganov/HM_LSTM/track_nan/variables',
+                                                'peganov/HM_LSTM3/effectiveness_clean/variables',
                                                 [10, 75, None])
 
-for i in range(4):
+for i in range(20):
     text_boundaries_plot(text_list[i],
                             boundary_list[i],
                             'boundaries by layer',
-                            ['peganov', 'HM_LSTM', 'track_nan', 'plots'],
+                            ['peganov', 'HM_LSTM3', 'effectiveness_clean', 'plots'],
                             'plot#%s' % i,
                             show=False)
 
-folder_name = 'peganov/HM_LSTM/track_nan'
-file_name = 'track_nan_result.pickle'
+folder_name = 'peganov/HM_LSTM3/effectiveness_clean'
+file_name = 'effectiveness_clean_result.pickle'
 force = True
 pickle_dump = {'results_GL': results_GL}
 if not os.path.exists(folder_name):
