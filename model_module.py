@@ -557,7 +557,7 @@ class MODEL(object):
             summary_dict=None,                                # a dictionary containing 'summaries_collection_frequency', 'summary_tensors'
                                                               # every 'summaries_collection_frequency'-th step summary is collected 
                                                               # 'summary_tensors' is a list of collected summary tensors
-            summary_graph=True,                               # defines if graph should be added to the summary                        
+            summary_graph=False,                              # defines if graph should be added to the summary                        
             gpu_memory=None):
                                                               
   
@@ -689,7 +689,7 @@ class MODEL(object):
                 train_operations_map.append(None)
                 train_operations_map.append(None)
 
-            if summary_graph is not None:
+            if summary_graph:
                 writer = tf.summary.FileWriter(summarizing_logdir,
                                                graph=self._graph) 
             

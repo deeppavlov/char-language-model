@@ -1,0 +1,7 @@
+Requirements:
+nvidia gpu with compute capability 3 or higher
+cuda toolkit 8
+cudnn v5.1
+python3
+tensorflow 1.2 for python3
+matplotlib 
