@@ -1,3 +1,11 @@
+
+# coding: utf-8
+
+# In[1]:
+
+
+# These are all the modules we'll be using later. Make sure you can import them
+# before proceeding further.
 from __future__ import print_function
 import numpy as np
 import math
@@ -16,13 +24,6 @@ from model_module import characters
 
 version = sys.version_info[0]
 
-
-
-from tensorflow.python.framework import dtypes
-from tensorflow.python.ops import array_ops
-from tensorflow.python.ops import gen_array_ops
-from tensorflow.python.ops import gen_math_ops
-from tensorflow.python.ops import math_ops
 
 # This class implements hierarchical LSTM described in the paper https://arxiv.org/pdf/1609.01704.pdf
 # All variables names and formula indices are taken from mentioned article
@@ -48,10 +49,12 @@ class HM_LSTM(MODEL):
     
     def not_last_layer(self,
                        idx,                   # layer number (from 0 to self._num_layers - 1)
+                       iter_idx,
                        state,                 # A tuple of tensors containing h^l_{t-1}, c^l_{t-1} and z^l_{t-1}
                        bottom_up,             # A tensor h^{l-1}_t  
                        top_down,              # A tensor h^{l+1}_{t-1}
-                       boundary_state_down):   # A tensor z^{l-1}_t
+                       boundary_state_down,   # A tensor z^{l-1}_t
+                       new_boundary):
 
         # method implements operations (2) - (7) (shortly (1)) performed on idx-th layer
         # ONLY NOT FOR LAST LAYER! Last layer computations are implemented in self.last_layer method
@@ -67,48 +70,31 @@ class HM_LSTM(MODEL):
             #       It was used for broadcasting activation along vectors in same batches
 
             # following operation computes a product z^l_{t-1} x h^{l+1}_{t-1} for formula (6)
-            tr_state2 = tf.transpose(state[2],
-                                     name="transposed_state2_in_top_down_prepaired")
-            tr_top_down = tf.transpose(top_down,
-                                       name="transposed_top_down_in_top_down_prepaired")
-            with self._graph.gradient_override_map({"Mul": self.gradient_name2}):
-                multiply_in_top_down_prepaired = tf.multiply(tr_state2,
-                                                             tr_top_down,
-                                                             name="multiply_in_top_down_prepaired")
-            top_down_prepaired = tf.transpose(multiply_in_top_down_prepaired,
+            top_down_prepaired = tf.transpose(tf.multiply(tf.transpose(state[2],
+                                                                       name="transposed_state2_in_top_down_prepaired"),
+                                                          tf.transpose(top_down,
+                                                                       name="transposed_top_down_in_top_down_prepaired"),
+                                                          name="multiply_in_top_down_prepaired"),
                                               name="top_down_prepaired")
 
             # this one cumputes a product z^{l-1}_t x h^{l-1}_t for formula (7)
-            tr_boundary_state_down = tf.transpose(boundary_state_down,
-                                                  name="transposed_boundary_state_down_in_bottom_down_prepaired")
-            tr_bottom_up = tf.transpose(bottom_up,
-                                        name="transposed_bottom_up_in_bottom_up_prepaired")
-            with self._graph.gradient_override_map({"Mul": self.gradient_name2}):
-                multiply_in_bottom_up_prepaired = tf.multiply(tr_boundary_state_down,
-                                                              tr_bottom_up,
-                                                              name="multiply_in_bottom_up_prepaired")
-            bottom_up_prepaired = tf.transpose(multiply_in_bottom_up_prepaired,
+            bottom_up_prepaired = tf.transpose(tf.multiply(tf.transpose(boundary_state_down,
+                                                                        name="transposed_boundary_state_down_in_bottom_down_prepaired"),
+                                                           tf.transpose(bottom_up,
+                                                                        name="transposed_bottom_up_in_bottom_up_prepaired"),
+                                                           name="multiply_in_bottom_up_prepaired"),
                                                name="bottom_up_prepaired")
             
-            # following implements formula (8). Missing (1-z) is added
             boundary_state_reversed = tf.subtract(one, state[2], name="boundary_state_reversed")
-            tr_boundary_state_reversed = tf.transpose(boundary_state_reversed,
-                                                      name="transposed_boundary_state_reversed_in_state0_prepaired")
-            tr_state0 = tf.transpose(state[0],
-                                     name="transposed_state0_state0_prepaired")
-            with self._graph.gradient_override_map({"Mul": self.gradient_name2}):
-                multiply_in_state0_prepaired = tf.multiply(tr_boundary_state_reversed,
-                                                           tr_state0,
-                                                           name="multiply_in_state0_prepaired")
-            state0_prepaired = tf.transpose(multiply_in_state0_prepaired,
+            state0_prepaired = tf.transpose(tf.multiply(tf.transpose(boundary_state_reversed,
+                                                                     name="transposed_boundary_state_reversed_in_state0_prepaired"),
+                                                        tf.transpose(state[0],
+                                                                     name="transposed_state0_state0_prepaired"),
+                                                        name="multiply_in_state0_prepaired"),
                                             name="state0_prepaired")
             
 
             # Matrix multiplications in formulas (5) - (7) and sum in argument of function f_slice
-            # in formula (4) are united in one operation
-            # Matrices U^l_l, U^l_{l+1} and W^l_{l-1} are concatenated into one matrix self.Matrices[idx]
-            # and vectors h^l_{t-1}, z^l_{t-1} x h^{l+1}_{t-1} and  z^{l-1}_t x h^{l-1}_t are 
-            # concatenated into vector X           # Matrix multiplications in formulas (5) - (7) and sum in argument of function f_slice
             # in formula (4) are united in one operation
             # Matrices U^l_l, U^l_{l+1} and W^l_{l-1} are concatenated into one matrix self.Matrices[idx]
             # and vectors h^l_{t-1}, z^l_{t-1} x h^{l+1}_{t-1} and  z^{l-1}_t x h^{l-1}_t are 
@@ -124,14 +110,11 @@ class HM_LSTM(MODEL):
 
             # following operations implement function vector implementation in formula (4)
             # and compute f^l_t, i^l_t, o^l_t, g^l_t and z^l_t
-            [sigmoid_arg, tanh_arg, hard_sigm_arg] = tf.split(concat,
-                                                              [3*self._num_nodes[idx], self._num_nodes[idx], 1],
-                                                              axis=1,
-                                                              name="split_to_function_arguments")
-            
-            L2_norm_of_hard_sigm_arg = self.L2_norm(hard_sigm_arg,
-                                                    1,
-                                                    "_hard_sigm")
+            [sigmoid_arg, tanh_arg] = tf.split(concat,
+                                               [3*self._num_nodes[idx], self._num_nodes[idx]],
+                                               axis=1,
+                                               name="split_to_function_arguments")
+
             
             gate_concat = tf.sigmoid(sigmoid_arg, name="gate_concat")
             [forget_gate, input_gate, output_gate] = tf.split(gate_concat,
@@ -142,7 +125,7 @@ class HM_LSTM(MODEL):
             modification_vector = tf.tanh(tanh_arg, name="modification_vector")
             # self.compute_boundary_state works as step function in forward pass
             # and as hard sigm in backward pass 
-            boundary_state = self.compute_boundary_state(hard_sigm_arg) 
+            boundary_state = new_boundary
 
             # Next operations implement c^l_t vector modification and h^l_t computing according to (2) and (3)
             # Since compute_boundary_state is the step function in forward pass
@@ -188,27 +171,22 @@ class HM_LSTM(MODEL):
                 tr_output_gate = tf.transpose(output_gate, name="tr_output_gate")
                 tr_modification_vector = tf.transpose(modification_vector, name="tr_modification_vector")
                 # new memory computation
-                # computing update term
-                update_term_without_flag = tf.add(tf.multiply(tr_forget_gate,
-                                                              tr_memory,
-                                                              name="multiply_forget_and_memory_in_update_term"),
-                                                  tf.multiply(tr_input_gate,
-                                                              tr_modification_vector,
-                                                              name="multiply_input_and_modification_in_update_term"),
-                                                  name="update_term_without_flag")
                 update_term = tf.multiply(update_flag,
-                                          update_term_without_flag,
+                                          tf.add(tf.multiply(tr_forget_gate,
+                                                             tr_memory,
+                                                             name="multiply_forget_and_memory_in_update_term"),
+                                                 tf.multiply(tr_input_gate,
+                                                             tr_modification_vector,
+                                                             name="multiply_input_and_modification_in_update_term"),
+                                                 name="add_in_update_term"),
                                           name="update_term")
-
-                # computing copy term
                 copy_term = tf.multiply(copy_flag, tr_memory, name="copy_term")
 
-                # computing flush term
-                flush_term_without_flag = tf.multiply(tr_input_gate,
-                                                      tr_modification_vector,
-                                                      name="flush_term_without_flag")
+                
                 flush_term = tf.multiply(flush_flag,
-                                         flush_term_without_flag,
+                                         tf.multiply(tr_input_gate,
+                                                     tr_modification_vector,
+                                                     name="multiply_input_and_modification_in_flush_term"),
                                          name="flush_term")
                 
                 tr_new_memory = tf.add(tf.add(update_term,
@@ -220,22 +198,17 @@ class HM_LSTM(MODEL):
                 # new hidden states computation
                 tr_hidden = tf.transpose(state[0], name="tr_hidden")
                 copy_term = tf.multiply(copy_flag, tr_hidden, name="copy_term_for_hidden")
-                    
-                else_flag = tf.subtract(one,
-                                        copy_flag,
-                                        name="else_flag")
-                else_term_without_flag = tf.multiply(tr_output_gate,
-                                                     tf.tanh(tr_new_memory, name="tanh_in_else_term"),
-                                                     name='else_term_without_flag')
-                else_term = tf.multiply(else_flag,
-                                        else_term_without_flag,
-                                        name='else_term')
+                else_term = tf.multiply(tf.multiply(tf.subtract(one,
+                                                                copy_flag,
+                                                                name="subtract_in_else_term"),
+                                                    tr_output_gate,
+                                                    name="multiply_subtract_and_tr_output_gate_in_else_term"),
+                                        tf.tanh(tr_new_memory, name="tanh_in_else_term"),
+                                        name="else_term")
                 new_hidden = tf.transpose(tf.add(copy_term, else_term, name="new_hidden"),
                                           name="new_hidden")
                 
-                helper = {"L2_norm_of_hard_sigm_arg": L2_norm_of_hard_sigm_arg,
-                          "hard_sigm_arg": hard_sigm_arg,
-                          "L2_forget_gate": L2_forget_gate}
+                helper = {"L2_forget_gate": L2_forget_gate}
         return new_hidden, new_memory, boundary_state, helper
     
     def last_layer(self,
@@ -255,19 +228,13 @@ class HM_LSTM(MODEL):
             # note: in several next operations tf.transpose method is applied repeatedly.
             #       It was used for broadcasting activation along vectors in same batches
 
-
             # this one cumputes a product z^{l-1}_t x h^{l-1}_t for formula (7)
-            tr_boundary_state_down = tf.transpose(boundary_state_down,
-                                                  name="transposed_boundary_state_down_in_bottom_down_prepaired")
-            tr_bottom_up = tf.transpose(bottom_up,
-                                        name="transposed_bottom_up_in_bottom_up_prepaired")
-            with self._graph.gradient_override_map({"Mul": self.gradient_name2}):
-                multiply_in_bottom_up_prepaired = tf.multiply(tr_boundary_state_down,
-                                                              tr_bottom_up,
-                                                              name="multiply_in_bottom_up_prepaired")
-            bottom_up_prepaired = tf.transpose(multiply_in_bottom_up_prepaired,
+            bottom_up_prepaired = tf.transpose(tf.multiply(tf.transpose(boundary_state_down,
+                                                                        name="transposed_boundary_state_down_in_bottom_down_prepaired"),
+                                                           tf.transpose(bottom_up,
+                                                                        name="transposed_bottom_up_in_bottom_up_prepaired"),
+                                                           name="multiply_in_bottom_up_prepaired"),
                                                name="bottom_up_prepaired")
-            
 
             # Matrix multiplications in formulas (5) - (7) and sum in argument of function f_slice
             # in formula (4) are united in one operation
@@ -321,19 +288,15 @@ class HM_LSTM(MODEL):
                 tr_output_gate = tf.transpose(output_gate, name="tr_output_gate")
                 tr_modification_vector = tf.transpose(modification_vector, name="tr_modification_gate")
                 # new memory computation
-                # update term computation
-                update_term_without_flag = tf.add(tf.multiply(tr_forget_gate,
-                                                              tr_memory,
-                                                              name="multiply_forget_and_memory_in_update_term"),
-                                                  tf.multiply(tr_input_gate,
-                                                              tr_modification_vector,
-                                                              name="multiply_input_and_modification_in_update_term"),
-                                                  name="update_term_without_flag")
                 update_term = tf.multiply(update_flag,
-                                          update_term_without_flag,
+                                          tf.add(tf.multiply(tr_forget_gate,
+                                                             tr_memory,
+                                                             name="multiply_forget_and_memory_in_update_term"),
+                                                 tf.multiply(tr_input_gate,
+                                                             tr_modification_vector,
+                                                             name="multiply_input_and_modification_in_update_term"),
+                                                 name="add_in_update_term"),
                                           name="update_term")
-                    
-                # copy_term computation
                 copy_term = tf.multiply(copy_flag, tr_memory, name="copy_term")
                 tr_new_memory = tf.add(update_term,
                                        copy_term,
@@ -341,42 +304,21 @@ class HM_LSTM(MODEL):
                 new_memory = tf.transpose(tr_new_memory, name="new_memory")
                 # new hidden states computation
                 tr_hidden = tf.transpose(state[0], name="tr_hidden")
-                
-                # copy_term computation
                 copy_term = tf.multiply(copy_flag, tr_hidden, name="copy_term_for_hidden")
-                    
-                    
-                else_flag = tf.subtract(one,
-                                        copy_flag,
-                                        name="else_flag")
-                else_term_without_flag = tf.multiply(tr_output_gate,
-                                                     tf.tanh(tr_new_memory, name="tanh_in_else_term"),
-                                                     name='else_term_without_flag')
-                else_term = tf.multiply(else_flag,
-                                        else_term_without_flag,
-                                        name='else_term')
-                    
+                else_term = tf.multiply(tf.multiply(tf.subtract(one,
+                                                                copy_flag,
+                                                                name="subtract_in_else_term"),
+                                                    tr_output_gate,
+                                                    name="multiply_subtract_and_tr_output_gate_in_else_term"),
+                                        tf.tanh(tr_new_memory, name="tanh_in_else_term"),
+                                        name="else_term")
                 new_hidden = tf.transpose(tf.add(copy_term, else_term, name="new_hidden"),
                                           name="new_hidden")
                 helper = {"L2_forget_gate": L2_forget_gate}
         return new_hidden, new_memory, helper
      
     
-    def compute_boundary_state(self,
-                               X):
-        # Elementwise calculates step function 
-        # During backward pass works as hard sigm
-        with self._graph.gradient_override_map({"Sign": self.gradient_name1}):
-            X = tf.sign(X, name="sign_func_in_compute_boundary")
-        """X = tf.sign(X)"""
-        X = tf.divide(tf.add(X,
-                             tf.constant([[1.]]),
-                             name="add_in_compute_boundary_state"),
-                      2.,
-                      name="output_of_compute_boundary_state")
-        return X
-    
-    def iteration(self, inp, state, iter_idx):
+    def iteration(self, inp, state, iter_idx, new_boundaries):
         # This function implements processing of one character embedding by HM_LSTM
         # 'inp' is one character embedding
         # 'state' is network state from previous layer
@@ -406,10 +348,12 @@ class HM_LSTM(MODEL):
             # All layers except for the first and the last ones
             for idx in range(num_layers-1):
                 hidden, memory, boundary, helper = self.not_last_layer(idx,
+                                                                       iter_idx,
                                                                        state[idx],
                                                                        hidden,
                                                                        state[idx+1][0],
-                                                                       boundary)
+                                                                       boundary,
+                                                                       new_boundaries[idx])
                 helpers.append(helper)
                 new_state.append((hidden, memory, boundary))
                 boundaries.append(boundary)
@@ -418,16 +362,42 @@ class HM_LSTM(MODEL):
                                                      boundary)
             helpers.append(helper)
             new_state.append((hidden, memory))
-            L2_norm_of_hard_sigm_arg_list = list()
-            helper = {"L2_norm_of_hard_sigm_arg": tf.concat([helper["L2_norm_of_hard_sigm_arg"] for helper in helpers[:-1]],
-                                                            1,
-                                                            name="L2_norm_of_hard_sigm_arg_for_all_layers"),
-                      "hard_sigm_arg": tf.concat([helper["hard_sigm_arg"] for helper in helpers[:-1]],
-                                                 1,
-                                                 name="hard_sigm_arg_for_all_layers"),
-                      "L2_forget_gate": tf.stack([helper["L2_forget_gate"] for helper in helpers],
+            helper = {"L2_forget_gate": tf.stack([helper["L2_forget_gate"] for helper in helpers],
                                                  name="L2_forget_gate_for_iteration%s"%iter_idx)}
             return new_state, tf.concat(boundaries, 1, name="iteration_boundaries_output"), helper
+        
+    def compute_boundary_states(self,
+                                inputs):
+        with tf.name_scope('compute_boundary_states'):
+            current_num_unrollings = len(inputs)
+            inputs = tf.concat(inputs,
+                               0,
+                               name="inputs_concat_in_embedding_module")
+            with tf.name_scope('first_level'):
+                after_multiplication = tf.multiply(inputs,
+                                                   self.first_level_delimeters,
+                                                   name='multiply_in_compute_boundary_states')
+                boundary_states_1 = tf.reduce_sum(after_multiplication,
+                                                  axis=1,
+                                                  keep_dims=True,
+                                                  name='boundary_states_concat')
+                boundary_states_1 = tf.split(boundary_states_1,
+                                             current_num_unrollings,
+                                             axis=0,
+                                             name="boundary_states")
+            with tf.name_scope('second_level'):
+                after_multiplication = tf.multiply(inputs,
+                                                   self.second_level_delimeters,
+                                                   name='multiply_in_compute_boundary_states')
+                boundary_states_2 = tf.reduce_sum(after_multiplication,
+                                                  axis=1,
+                                                  keep_dims=True,
+                                                  name='boundary_states_concat')
+                boundary_states_2 = tf.split(boundary_states_2,
+                                             current_num_unrollings,
+                                             axis=0,
+                                             name="boundary_states")
+            return [boundary_states_1, boundary_states_2]             
     
     def embedding_module(self,
                          inputs):
@@ -446,10 +416,29 @@ class HM_LSTM(MODEL):
                             axis=0,
                             name="embedding_module_output")
     
+    def process_saved_boundary(self, boundary, name_of_scope):
+        with tf.name_scope(name_of_scope):
+            plus_one = tf.add(boundary, 1., name='plus_one')
+            processed_boundary = tf.subtract(plus_one, 1., name='processed_boundary')
+            return processed_boundary
+   
+    def retrieve_state(self, saved_state):
+        processed_boundaries = list()
+        with tf.name_scope('retrieving_state'):
+            for layer_idx in range(self._num_layers - 1):
+                processed_boundaries.append(self.process_saved_boundary(saved_state[layer_idx][2], 'boundary_%s_processing'%layer_idx))
+        processed_state = list()
+        for layer_idx in range(self._num_layers - 1):
+            processed_state.append((saved_state[layer_idx][0],
+                                    saved_state[layer_idx][1],
+                                    processed_boundaries[layer_idx]))
+        processed_state.append(saved_state[self._num_layers-1])
+        return processed_state, processed_boundaries
     
     def RNN_module(self,
                    embedded_inputs,
-                   saved_state):
+                   saved_state,
+                   boundaries):
         # This function implements processing of embedded inputs by HM_LSTM
         # Function returns: state of recurrent neural network after last character processing 'state',
         # hidden states obtained on each character 'saved_hidden_states' and boundaries on each layer 
@@ -472,7 +461,8 @@ class HM_LSTM(MODEL):
             state = saved_state
             iteration_helpers = list()
             for emb_idx, emb in enumerate(embedded_inputs):
-                state, iteration_boundaries, helper = self.iteration(emb, state, emb_idx)
+                input_boundaries = [boundaries[0][emb_idx], boundaries[1][emb_idx]]
+                state, iteration_boundaries, helper = self.iteration(emb, state, emb_idx, input_boundaries)
                 iteration_helpers.append(helper)
                 saved_iteration_boundaries.append(iteration_boundaries)
                 for layer_state, saved_hidden in zip(state, saved_hidden_states):
@@ -500,13 +490,7 @@ class HM_LSTM(MODEL):
             for idx, layer_saved in enumerate(saved_hidden_states):
                 saved_hidden_states[idx] = tf.concat(layer_saved, 0, name="hidden_concat_in_RNN_module_on_layer%s"%idx)
 
-            helper = {"L2_norm_of_hard_sigm_arg": tf.stack([helper["L2_norm_of_hard_sigm_arg"] for helper in iteration_helpers],
-                                                           axis=1,
-                                                           name="L2_norm_of_hard_sigm_arg_for_all_iterations"),
-                      "hard_sigm_arg": tf.stack([helper["hard_sigm_arg"] for helper in iteration_helpers],
-                                                axis=1,
-                                                name="hard_sigm_arg_for_all_iterations"),
-                      "all_boundaries": tf.stack(saved_iteration_boundaries,
+            helper = {"all_boundaries": tf.stack(saved_iteration_boundaries,
                                                  axis=1,
                                                  name="stack_of_boundaries"),
                       "L2_norm_of_hidden_states": L2_norm,
@@ -567,7 +551,38 @@ class HM_LSTM(MODEL):
             entropy = tf.reduce_sum(multiply, axis=1, name="entropy")
             perplexity = tf.exp(tf.multiply(ln2, entropy, name="multiply_in_perplexity"), name="perplexity")
             return tf.reduce_mean(perplexity, name="mean_perplexity")
-            
+        
+    def create_delimeters(self):
+        first_level_delimeters = [' ', '\n', '\t']
+        second_level_delimeters = list()
+        length = len(self._vocabulary)
+        for char in self._vocabulary:
+            relative_lowercase = ord(char) - ord('a')
+            relative_uppercase = ord(char) - ord('A')
+            it_is_not_lowercase = (relative_lowercase < 0) or (relative_lowercase > 25)
+            it_is_not_uppercase = (relative_uppercase < 0) or (relative_uppercase > 25)
+            it_is_not_apostrophe = (char != "'")
+            if it_is_not_lowercase and it_is_not_uppercase and it_is_not_apostrophe:
+                it_is_not_first_level_delimeter = True
+                for delimeter in first_level_delimeters:
+                    it_is_not_first_level_delimeter = it_is_not_first_level_delimeter and (delimeter != char)
+                if it_is_not_first_level_delimeter:
+                    second_level_delimeters.append(char) 
+        first_level_delimeters.extend(second_level_delimeters)
+        base = tf.constant([0.]*length, name='base')
+        first_level = base
+        second_level = base
+        with tf.name_scope('delimeters'):
+            one_hot_list = [0.]*length
+            for idx, delimeter in enumerate(first_level_delimeters):
+                one_hot_list[self._vocabulary.index(delimeter)] = 1.
+            first_level = tf.constant(one_hot_list, name='first_level_delimeters')
+            one_hot_list = [0.]*length
+            for idx, delimeter in enumerate(second_level_delimeters):
+                one_hot_list[self._vocabulary.index(delimeter)] = 1.
+            second_level = tf.constant(one_hot_list, name='second_level_delimeters')
+        return first_level, second_level        
+
     def __init__(self,
                  batch_size,
                  vocabulary,
@@ -575,18 +590,20 @@ class HM_LSTM(MODEL):
                  num_unrollings,
                  num_layers,
                  num_nodes,
+
                  init_slope,
                  slope_growth,
                  slope_half_life,
+
+                 
                  train_text,
                  valid_text,
                  embedding_size=128,
                  output_embedding_size=1024,
                  init_parameter=1.,               # init_parameter is used for balancing stddev in matrices initialization
                                                   # and initial learning rate
-                 matr_init_parameter=1000.,
-                 override_appendix='',
-                 init_bias=0.):               
+                 matr_init_parameter=1000.):     
+                                                   
                                                    
         self._results = list()
         self._batch_size = batch_size
@@ -596,9 +613,6 @@ class HM_LSTM(MODEL):
         self._num_unrollings = num_unrollings
         self._num_layers = num_layers
         self._num_nodes = num_nodes
-        self._init_slope = init_slope
-        self._slope_half_life = slope_half_life
-        self._slope_growth = slope_growth
         self._train_text = train_text
         self._valid_text = valid_text
         self._valid_size = len(valid_text)
@@ -606,9 +620,7 @@ class HM_LSTM(MODEL):
         self._output_embedding_size = output_embedding_size
         self._init_parameter = init_parameter
         self._matr_init_parameter = matr_init_parameter
-        self._init_bias = init_bias
-        self.gradient_name1 = 'HardSigmoid' + override_appendix
-        self.gradient_name2 = 'NewMul' + override_appendix
+
         self._indices = {"batch_size": 0,
                          "num_unrollings": 1,
                          "num_layers": 2,
@@ -617,20 +629,17 @@ class HM_LSTM(MODEL):
                          "decay": 5,
                          "num_steps": 6,
                          "averaging_number": 7,
-                         "init_slope": 8,
-                         "slope_growth": 9,
-                         "slope_half_life": 10,
-                         "embedding_size": 11,
-                         "output_embedding_size": 12,
-                         "init_parameter": 13,
-                         "matr_init_parameter": 14,
-                         "init_bias":15,
-                         "type": 16}
+                         "embedding_size": 8,
+                         "output_embedding_size": 9,
+                         "init_parameter": 10,
+                         "matr_init_parameter": 11,
+                         "type": 12}
         self._graph = tf.Graph()
         
         self._last_num_steps = 0
         with self._graph.as_default(): 
             tf.set_random_seed(1)
+            self.first_level_delimeters, self.second_level_delimeters = self.create_delimeters()
             with tf.name_scope('train'):
                 self._global_step = tf.Variable(0, trainable=False, name="global_step")
             with self._graph.device('/gpu:0'):
@@ -646,34 +655,31 @@ class HM_LSTM(MODEL):
                 
                 # tensor name templates for HM_LSTM parameters
                 init_matr_name = "HM_LSTM_matrix_%s_initializer"
+                init_bias_name = "HM_LSTM_bias_%s_initializer"
                 bias_name = "HM_LSTM_bias_%s" 
                 matr_name = "HM_LSTM_matrix_%s"
                 
                 def compute_dim_and_bias(layer_idx):
-                    bias_init_values = [0.]*(4*self._num_nodes[layer_idx])
+                    output_dim = 4 * self._num_nodes[layer_idx]
                     if layer_idx == self._num_layers - 1:
                         input_dim = self._num_nodes[-1] + self._num_nodes[-2]
-                        output_dim = 4 * self._num_nodes[-1]
+                    elif layer_idx == 0:
+                        input_dim = self._embedding_size + self._num_nodes[0] + self._num_nodes[1]
                     else:
-                        output_dim = 4 * self._num_nodes[layer_idx] + 1
-                        bias_init_values.append(self._init_bias)
-                        if layer_idx == 0:
-                            input_dim = self._embedding_size + self._num_nodes[0] + self._num_nodes[1]
-                        else:
-                            input_dim = self._num_nodes[layer_idx - 1] + self._num_nodes[layer_idx] + self._num_nodes[layer_idx+1]
+                        input_dim = self._num_nodes[layer_idx - 1] + self._num_nodes[layer_idx] + self._num_nodes[layer_idx+1]
                     stddev = math.sqrt(self._init_parameter*matr_init_parameter/input_dim)
-                    return input_dim, output_dim, bias_init_values, stddev
+                    return input_dim, output_dim, stddev
                 
                 for layer_idx in range(self._num_layers):
-                    input_dim, output_dim, bias_init_values, stddev = compute_dim_and_bias(layer_idx)
-                    self.Biases.append(tf.Variable(bias_init_values,
+                    input_dim, output_dim, stddev = compute_dim_and_bias(layer_idx)
+                    self.Biases.append(tf.Variable(tf.zeros([output_dim], name=init_bias_name%layer_idx),
                                                    name=bias_name%layer_idx))         
                     self.Matrices.append(tf.Variable(tf.truncated_normal([input_dim,
                                                                           output_dim],
                                                                          mean=0.,
                                                                          stddev=stddev,
                                                                          name=init_matr_name%0),
-                                                     name=matr_name%layer_idx))  
+                                                     name=matr_name%layer_idx))     
 
                 dim_classifier_input = sum(self._num_nodes)
                 
@@ -715,8 +721,8 @@ class HM_LSTM(MODEL):
                                                       axis=1,
                                                       name="train_inputs_for_slice")
                     self.train_input_print = tf.reshape(tf.split(train_inputs_for_slice,
-                                                                 [1, self._batch_size-1],
-                                                                 name="split_in_train_print")[0],
+                                                                 [2, 1, self._batch_size-3],
+                                                                 name="split_in_train_print")[1],
                                                         [self._num_unrollings, -1],
                                                         name="train_print")
 
@@ -748,59 +754,13 @@ class HM_LSTM(MODEL):
                                                          name=saved_state_templ%(self._num_layers-1, 1))))
 
 
-                    # slope annealing trick
-                    slope = tf.add(tf.constant(self._init_slope, name="init_slope_const"),
-                                   tf.to_float((self._global_step / tf.constant(self._slope_half_life,
-                                                                                dtype=tf.int32,
-                                                                                name="slope_half_life_const")),
-                                               name="to_float_in_slope_init") * tf.constant(self._slope_growth, name="slope_growth"),
-                                   name="slope")
-                    
-                    @tf.RegisterGradient(self.gradient_name1)
-                    def hard_sigm_grad(op,                # op is operation for which gradient is computed
-                                       grad):             # loss partial gradients with respect to op outputs
-                        # This function is added for implememting straight-through estimator as described in
-                        # 3.3 paragraph of fundamental paper. It is used during backward pass for replacing
-                        # tf.sign function gradient. 'hard sigm' function derivative is 0 from minus
-                        # infinity to -1/a, a/2 from -1/a to 1/a and 0 from 1/a to plus infinity. Since in
-                        # compute_boundary_state function for implementing step function tf.sign product is
-                        # divided by 2, in hard_sigm_grad output gradient is equal to 'a', not to 'a/2' from
-                        # -1/a to 1/a in order to compensate mentioned multiplication in compute_boundary_state
-                        # function
-                        op_input = op.inputs[0]
-                        # slope is parameter 'a' in 'hard sigm' function
-                        mask = tf.to_float(tf.logical_and(tf.greater_equal(op_input, -1./ slope, name="greater_equal_in_hard_sigm_mask"),
-                                                          tf.less(op_input, 1. / slope, name="less_in_hard_sigm_mask"),
-                                                          name="logical_and_in_hard_sigm_mask"),
-                                           name="mask_in_hard_sigm")
-                        return tf.multiply(slope,
-                                           tf.multiply(grad,
-                                                       mask,
-                                                       name="grad_mask_multiply_in_hard_sigm"),
-                                           name="hard_sigm_grad_output")
-                    @tf.RegisterGradient(self.gradient_name2)
-                    def new_mul_grad(op,                # op is operation for which gradient is computed
-                                     grad):             # loss partial gradients with respect to op outputs
-                        """The gradient of scalar multiplication."""
-                        x = op.inputs[0]
-                        y = op.inputs[1]
-                        assert x.dtype.base_dtype == y.dtype.base_dtype, (x.dtype, " vs. ", y.dtype)
-                        sx = array_ops.shape(x)
-                        sy = array_ops.shape(y)
-                        rx, ry = gen_array_ops._broadcast_gradient_args(sx, sy)
-                        x = math_ops.conj(x)
-                        y = math_ops.conj(y)
-                        not_modified_1 = array_ops.reshape(math_ops.reduce_sum(grad * y, rx), sx)
-                        not_modified_2 = array_ops.reshape(math_ops.reduce_sum(x * grad, ry), sy)
-                        tr_not_modified_2 = array_ops.transpose(not_modified_2)
-                        tr_x = array_ops.transpose(x)
-                        modified_1 = math_ops.multiply(not_modified_1, x)
-                        modified_2 = array_ops.transpose(math_ops.multiply(tr_x, tr_not_modified_2))
-                        return (modified_1,
-                                modified_2)
-                    
                     embedded_inputs = self.embedding_module(train_inputs)
-                    state, hidden_states, train_helper = self.RNN_module(embedded_inputs, self.saved_state)
+                    retrieved_state, control_operations = self.retrieve_state(self.saved_state)
+                    with tf.control_dependencies(control_operations):
+                        self.boundaries = self.compute_boundary_states(train_inputs)
+                    state, hidden_states, train_helper = self.RNN_module(embedded_inputs,
+                                                                         retrieved_state,
+                                                                         self.boundaries)
                     logits = self.output_module(hidden_states)
                     
                     self.L2_train = tf.reshape(tf.slice(train_helper["L2_norm_of_hidden_states"],
@@ -810,18 +770,18 @@ class HM_LSTM(MODEL):
                                                [-1],
                                                name="L2")
                     
-                    self.train_hard_sigm_arg = tf.reshape(tf.split(train_helper["hard_sigm_arg"],
-                                                                   [1, self._batch_size-1],
-                                                                   name="split_in_train_hard_sigm_arg")[0],
-                                                          [self._num_unrollings, -1],
-                                                          name="train_hard_sigm_arg")
-                    
                     L2_forget_gate_reduced = tf.reduce_mean(train_helper['L2_forget_gate'],
                                                             axis=0,
                                                             name="L2_forget_gate_reduced")
                     
                     self.L2_forget_gate = tf.unstack(L2_forget_gate_reduced, name="L2_forget_gate_unstacked")
-                    
+                    self.all_boundaries = train_helper['all_boundaries']
+                    one_chunk_boundaries = tf.split(self.all_boundaries,
+                                                    [2, 1, self._batch_size-3],
+                                                    name='one_chunk_boundaries')[1]
+                    self.boundaries_for_plot = tf.reshape(one_chunk_boundaries,
+                                                          [self._num_unrollings, 2],
+                                                          name='boundaries_for_plot')
                     flush_fractions_stacked = tf.reduce_mean(train_helper['all_boundaries'],
                                                              axis=[0, 1],
                                                              name='flush_fractions_stacked')
@@ -831,15 +791,6 @@ class HM_LSTM(MODEL):
                                                     axis=0,
                                                     name='flush_fractions')
                     
-                    L2_hard_sigm_arg_stacked = self.L2_norm(train_helper['hard_sigm_arg'],
-                                                            [0, 1],
-                                                            'hard_sigm_arg_stacked',
-                                                            keep_dims=False)
-                    
-                    self.L2_hard_sigm_arg = tf.split(L2_hard_sigm_arg_stacked,
-                                                     self._num_layers-1,
-                                                     name='hard_sigm_arg')
-
                     save_list = list()
                     save_list_templ = "save_list_assign_layer%s_number%s"
                     for i in range(self._num_layers-1):
@@ -983,8 +934,12 @@ class HM_LSTM(MODEL):
 
 
                     sample_embedded_inputs = self.embedding_module([self._sample_input])
+                    retrieved_state, control_operations = self.retrieve_state(saved_sample_state)
+                    with tf.control_dependencies(control_operations):
+                        self.sample_boundary_states = self.compute_boundary_states([self._sample_input])
                     sample_state, sample_hidden_states, validation_helper = self.RNN_module(sample_embedded_inputs,
-                                                                                            saved_sample_state)
+                                                                                            retrieved_state,
+                                                                                            self.sample_boundary_states)
                     sample_logits = self.output_module(sample_hidden_states) 
 
                     sample_save_list = list()
@@ -1011,7 +966,6 @@ class HM_LSTM(MODEL):
                         self._sample_prediction = tf.nn.softmax(sample_logits, name="sample_prediction") 
                         self.L2_hidden_states_validation = tf.reshape(validation_helper["L2_norm_of_hidden_states"], [-1], name="L2_hidden_validation")
                         self.boundary = tf.reshape(validation_helper["all_boundaries"], [-1], name="sample_boundary")
-                        self.sigm_arg = tf.reshape(validation_helper["hard_sigm_arg"], [-1], name="sample_sigm_arg")
                         self.validation_perplexity = self.compute_perplexity(self._sample_prediction)
                 # creating control dictionary
                 all_vars = tf.global_variables()
@@ -1037,7 +991,6 @@ class HM_LSTM(MODEL):
                     #print(name, ': ', norm.get_shape().as_list())
             forget_template = 'self.L2_forget_gate[%s]'
             flush_fractions_template = 'self.flush_fractions[%s]'
-            L2_hard_sigm_template = 'self.L2_hard_sigm_arg[%s]'
             for layer_idx in range(self._num_layers):
                 self.control_dictionary[forget_template % layer_idx] = tf.summary.scalar(forget_template % layer_idx +'_sum', 
                                                                                          self.L2_forget_gate[layer_idx])
@@ -1046,26 +999,10 @@ class HM_LSTM(MODEL):
                                                                                                   tf.reshape(self.flush_fractions[layer_idx],
                                                                                                              [],
                                                                                                              name='reshaping_flush_fractions_%s'%layer_idx))
-                self.control_dictionary[L2_hard_sigm_template % layer_idx] = tf.summary.scalar(L2_hard_sigm_template % layer_idx +'_sum', 
-                                                                                               tf.reshape(self.L2_hard_sigm_arg[layer_idx],
-                                                                                                          [],
-                                                                                                          name='reshaping_L2_hard_sigm_%s'%layer_idx))            
-            self.control_dictionary['loss'] = tf.summary.scalar('loss_sum', self._loss)
+            self.control_dictionary['loss'] = tf.summary.scalar('loss_sum', self._loss) 
             """saver"""
             self.saver = tf.train.Saver(max_to_keep=None)
-            
-    def reinit(self,
-               init_slope,
-               slope_growth,
-               slope_half_life,
-               init_parameter,               # init_parameter is used for balancing stddev in matrices initialization
-                                                  # and initial learning rate
-               matr_init_parameter):
-        self._init_slope = init_slope
-        self._slope_half_life = slope_half_life
-        self._slope_growth = slope_growth
-        self._init_parameter = init_parameter
-        self._matr_init_parameter = matr_init_parameter        
+       
                            
                         
     
@@ -1079,14 +1016,10 @@ class HM_LSTM(MODEL):
         metadata.append(decay)
         metadata.append(self._last_num_steps)
         metadata.append(num_averaging_iterations)
-        metadata.append(self._init_slope)
-        metadata.append(self._slope_growth)
-        metadata.append(self._slope_half_life)
         metadata.append(self._embedding_size)
         metadata.append(self._output_embedding_size)
         metadata.append(self._init_parameter)
         metadata.append(self._matr_init_parameter)
-        metadata.append(self._init_bias)
         metadata.append('HM_LSTM')
         return metadata
   
@@ -1134,3 +1067,5 @@ class HM_LSTM(MODEL):
             else:        
                 _ = self._sample_prediction.eval({self._sample_input: b[0]})
         return text_list, boundaries_list
+
+

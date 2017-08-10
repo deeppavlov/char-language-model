@@ -549,7 +549,7 @@ class HM_LSTM(MODEL):
                                                   # and initial learning rate
                  matr_init_parameter=1000.,
                  override_appendix='',
-                 init_bias=-0.01):               
+                 init_bias=0.):               
                                                    
         self._results = list()
         self._batch_size = batch_size
@@ -610,8 +610,7 @@ class HM_LSTM(MODEL):
                 init_matr_name = "HM_LSTM_matrix_%s_initializer"
                 bias_name = "HM_LSTM_bias_%s" 
                 matr_name = "HM_LSTM_matrix_%s"
-                
-                def compute_dim_and_bias():
+                def compute_dim_and_bias(layer_idx):
                     bias_init_values = [0.]*(4*self._num_nodes[layer_idx])
                     if layer_idx == self._num_layers - 1:
                         input_dim = self._num_nodes[-1] + self._num_nodes[-2]
@@ -627,7 +626,7 @@ class HM_LSTM(MODEL):
                     return input_dim, output_dim, bias_init_values, stddev
                 
                 for layer_idx in range(self._num_layers):
-                    input_dim, output_dim, bias_init_values, stddev = compute_dim_and_bias()
+                    input_dim, output_dim, bias_init_values, stddev = compute_dim_and_bias(layer_idx)
                     self.Biases.append(tf.Variable(bias_init_values,
                                                    name=bias_name%layer_idx))         
                     self.Matrices.append(tf.Variable(tf.truncated_normal([input_dim,
@@ -635,7 +634,7 @@ class HM_LSTM(MODEL):
                                                                          mean=0.,
                                                                          stddev=stddev,
                                                                          name=init_matr_name%0),
-                                                     name=matr_name%layer_idx))     
+                                                     name=matr_name%layer_idx))    
 
                 dim_classifier_input = sum(self._num_nodes)
                 

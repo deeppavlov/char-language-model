@@ -37,6 +37,8 @@ if sys.argv[1] == 'HM_LSTM':
     from HM_LSTM_core import HM_LSTM
 elif sys.argv[1] == 'HM_LSTM3':
     from HM_LSTM3_core import HM_LSTM
+elif sys.argv[1] == 'HM_LSTM_fixed':
+    from HM_LSTM_fixed_core import HM_LSTM
 
 version = sys.version_info[0]
 
@@ -117,7 +119,8 @@ slope_growth = .5
 slope_half_life = 1000
 results_GL = list()
 run_idx = 0
-model_type = 'HM_LSTM3'
+model_type = sys.argv[1]
+number_of_plots = 20
 folder_name = 'repeated_nn%sis%ssg%sshl%s' % (num_nodes, init_slope, slope_growth, slope_half_life)
 name_of_run_template = 'ip%s_imp%s' % (init_parameter_value, matr_init_parameter_value) +'#%s'
 for i in range(1):
@@ -137,7 +140,7 @@ for i in range(1):
                         matr_init_parameter=matr_init_parameter_value,
                         override_appendix=str(run_idx))
     model.simple_run(100,                # number of percents values used for final averaging
-                         'peganov/HM_LSTM/'+ model_type + '/' + folder_name +'/'+name_of_run+'/variables',
+                         'peganov/'+ model_type + '/' + folder_name +'/'+name_of_run+'/variables',
                          100,              # minimum number of learning iterations
                          20000,              # period of checking loss function. It is used defining if learning should be stopped
                          20000,              # learning has a chance to be stopped after every block of steps
@@ -146,13 +149,13 @@ for i in range(1):
                          3,                  # if fixed_num_steps=False this parameter defines when the learning process should be stopped. If during half the total learning time loss function decreased less than by 'stop_percent' percents the learning would be stopped
                          fixed_num_steps=True)
     text_list, boundary_list = model.run_for_analitics(model.get_boundaries,
-                                                'peganov/HM_LSTM/'+ model_type + '/' + folder_name +'/'+name_of_run+'/variables',
-                                                [10, 75, None])
-    for i in range(4):
+                                                'peganov/'+ model_type + '/' + folder_name +'/'+name_of_run+'/variables',
+                                                [number_of_plots, 75, None])
+    for i in range(number_of_plots):
         text_boundaries_plot(text_list[i],
                             boundary_list[i],
                             'boundaries by layer',
-                            ['peganov', 'HM_LSTM', model_type, folder_name, name_of_run, 'plots'],
+                            ['peganov', model_type, folder_name, name_of_run, 'plots'],
                             name_of_run+'plot#%s' % i,
                             show=False)
     results_GL.append(model._results[-1])
@@ -161,7 +164,7 @@ for i in range(1):
     del model
     gc.collect()
 pickle_file_name = folder_name
-folder_name = 'peganov/HM_LSTM/' + model_type + '/' +pickle_file_name
+folder_name = 'peganov/' + model_type + '/' +pickle_file_name
 file_name = pickle_file_name+'.pickle'
 pickle_dump = {'results_GL': results_GL}
 if not os.path.exists(folder_name):

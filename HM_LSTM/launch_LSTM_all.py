@@ -12,11 +12,10 @@ import gc
 from six.moves import cPickle as pickle
 import sys
 import subprocess
-if not os.path.exists('model_module.py') or not os.path.exists('plot_module.py'):
+if not os.path.isfile('model_module.py') or not os.path.isfile('plot_module.py'):
     current_path = os.path.dirname(os.path.abspath('__file__'))
     additional_path = '/'.join(current_path.split('/')[:-1])
     sys.path.append(additional_path)
-
 from plot_module import text_plot
 from plot_module import structure_vocabulary_plots
 from plot_module import text_boundaries_plot
@@ -34,15 +33,9 @@ from model_module import logprob
 from model_module import sample_distribution
 
 
-if sys.argv[1] == 'HM_LSTM':
-    from HM_LSTM_core import HM_LSTM
-elif sys.argv[1] == 'HM_LSTM3':
-    from HM_LSTM3_core import HM_LSTM
-elif sys.argv[1] == 'HM_LSTM_fixed':
-    from HM_LSTM_fixed_core import HM_LSTM
+from LSTM_all_core import LSTM
 
 version = sys.version_info[0]
-
 
 class CommandLineInput(Exception):
     def __init__(self, value):
@@ -50,9 +43,9 @@ class CommandLineInput(Exception):
     def __str__(self):
         return repr(self.value)
 
-if len(sys.argv) < 3:
-    raise CommandLineInput("3rd command line argument indicating dataset type is missing.\nUse either 'clean' or 'dirty'")
-if sys.argv[2] == 'dirty':
+if len(sys.argv) < 2:
+    raise CommandLineInput("2nd command line argument indicating dataset type is missing.\nUse either 'clean' or 'dirty'")
+if sys.argv[1] == 'dirty':
     if not os.path.exists('enwik8_filtered'):
         if not os.path.exists('enwik8'):
             filename = maybe_download('enwik8.zip', 36445475)
@@ -93,7 +86,7 @@ if sys.argv[2] == 'dirty':
         text = f.read().decode('utf8')
         f.close() 
         (not_one_byte_counter, min_character_order_index, max_character_order_index, number_of_characters, present_characters_indices) = check_not_one_byte(text)
-elif sys.argv[2] == 'clean':
+elif sys.argv[1] == 'clean':
     if not os.path.exists('enwik8_clean'):
         if not os.path.exists('enwik8'):
             filename = maybe_download('enwik8.zip', 36445475)
@@ -109,12 +102,12 @@ elif sys.argv[2] == 'clean':
     (not_one_byte_counter, min_character_order_index, max_character_order_index, number_of_characters, present_characters_indices) = check_not_one_byte(text)
 
 else:
-    raise CommandLineInput("3rd command line argument indicating dataset type is wrong.\nUse either 'clean' or 'dirty'")
+    raise CommandLineInput("2nd command line argument indicating dataset type is wrong.\nUse either 'clean' or 'dirty'")
 
 
 #different
 offset = 20000
-valid_size = 500
+valid_size = 10000
 valid_text = text[offset:offset+valid_size]
 train_text = text[offset+valid_size:]
 train_size = len(train_text)
@@ -145,81 +138,46 @@ for i in range(vocabulary_size):
     string_vocabulary += vocabulary[i]
 
 
-# In[6]:
+model = LSTM(64,
+                 vocabulary,
+                 characters_positions_in_vocabulary,
+                 100,
+                 3,
+                 [256, 256, 256],
+                 train_text,
+                 valid_text,
+                init_parameter=1e-6,
+                 matr_init_parameter=100000)
 
 
+model.run(20,                # number of times learning_rate is decreased
+          0.9,              # a factor by which learning_rate is decreased
+            100,            # each 'train_frequency' steps loss and percent correctly predicted letters is calculated
+            500,             # minimum number of times loss and percent correctly predicted letters are calculated while learning (train points)
+            3,              # if during half total spent time loss decreased by less than 'stop_percent' percents learning process is stopped
+            1,              # when train point is obtained validation may be performed
+            3,             # when train point percent is calculated results got on averaging_number chunks are averaged
+          fixed_number_of_steps=50001,
+          validation_example_length=40, 
+           #debug=True,
+            print_intermediate_results = True,
+          path_to_file_for_saving_prints='peganov/LSTM_all/effectiveness_clean/effectiveness_clean.txt',
+           save_path="peganov/LSTM_all/effectiveness_clean/variables",
+           gpu_memory=0.4)
+results_GL = list(model._results)
 
-init_parameters = [1e-4, 1e-5, 1e-6, 1e-7, 1e-8, 1e-9]
-matr_init_parameters = [50, 100, 1000, 10000, 100000, 1000000]
-#init_parameters = [1e-5]
-#matr_init_parameters = [50]
-num_nodes = 128
-init_slope = .5
-slope_growth = .5
-slope_half_life = 1000
-results_GL = list()
-run_idx = 0
-model_type = sys.argv[1]
-number_of_plots = 20
-folder_name = 'init_nn%sis%ssg%sshl%s' % (num_nodes, init_slope, slope_growth, slope_half_life)
-for init_parameter_value in init_parameters:
-    print(' '*10, "init parameter: ", init_parameter_value)
-    for matr_init_parameter_value in matr_init_parameters:
-        print(' '*5, "matr init parameter: ", matr_init_parameter_value)
-        name_of_run = 'ip%s_imp%s' % (init_parameter_value, matr_init_parameter_value)
-        model = HM_LSTM(64,
-                                 vocabulary,
-                                 characters_positions_in_vocabulary,
-                                 30,
-                                 3,
-                                 [num_nodes, num_nodes, num_nodes],
-                                 init_slope,
-                                 slope_growth,
-                                  slope_half_life,
-                                 train_text,
-                                 valid_text,
-                        init_parameter=init_parameter_value,
-                        matr_init_parameter=matr_init_parameter_value,
-                        override_appendix=str(run_idx))
-        model.simple_run(100,                # number of percents values used for final averaging
-                         'peganov/'+ model_type + '/' + folder_name +'/'+name_of_run+'/variables',
-                         10000,              # minimum number of learning iterations
-                         20000,              # period of checking loss function. It is used defining if learning should be stopped
-                         20000,              # learning has a chance to be stopped after every block of steps
-                         10,                 # number of times 'learning_rate' is multiplied on 'decay'
-                         .8,                 # a factor by which the learning rate decreases each 'half_life'
-                         3,                  # if fixed_num_steps=False this parameter defines when the learning process should be stopped. If during half the total learning time loss function decreased less than by 'stop_percent' percents the learning would be stopped
-                         fixed_num_steps=True)
-        text_list, boundary_list = model.run_for_analitics(model.get_boundaries,
-                                                'peganov/'+ model_type + '/' + folder_name +'/'+name_of_run+'/variables',
-                                                [number_of_plots, 75, None])
-        for i in range(number_of_plots):
-            text_boundaries_plot(text_list[i],
-                            boundary_list[i],
-                            'boundaries by layer',
-                            ['peganov', model_type, folder_name, name_of_run, 'plots'],
-                            name_of_run+'#%s' % i,
-                            show=False)
-        results_GL.append(model._results[-1])
-        run_idx += 1
-        model.destroy()
-        del model
-        gc.collect()
-pickle_file_name = folder_name
-folder_name = 'peganov/' + model_type + '/' +pickle_file_name
-file_name = pickle_file_name+'.pickle'
+folder_name = 'peganov/LSTM_all/effectiveness_clean'
+file_name = 'effectiveness_clean_result.pickle'
+force = True
 pickle_dump = {'results_GL': results_GL}
 if not os.path.exists(folder_name):
     try:
         os.makedirs(folder_name)
     except Exception as e:
         print("Unable create folder '%s'" % folder_name, ':', e)    
-print('Pickling %s.' % (folder_name + '/' + file_name))
+print('Pickling %s' % (folder_name + '/' + file_name))
 try:
     with open(folder_name + '/' + file_name, 'wb') as f:
         pickle.dump(pickle_dump, f, pickle.HIGHEST_PROTOCOL)
 except Exception as e:
     print('Unable to save data to', file_name, ':', e)
-
-
-

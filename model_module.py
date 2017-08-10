@@ -689,11 +689,11 @@ class MODEL(object):
                 train_operations_map.append(None)
                 train_operations_map.append(None)
 
-            if summary_graph:
-                writer = tf.summary.FileWriter(summarizing_logdir,
-                                               graph=self._graph) 
-            
-            # 'summary_dict['summary_tensors']' is processed
+            if summary_dict is not None:
+                writer = tf.summary.FileWriter(summarizing_logdir)
+                if summary_graph:
+                     writer.add_graph(self._graph) 
+                     # 'summary_dict['summary_tensors']' is processed
             if summary_dict is not None:
                 train_operations_map.append(pointer)
                 pointer += len(summary_dict['summary_tensors'])

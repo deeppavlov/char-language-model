@@ -37,6 +37,8 @@ if sys.argv[1] == 'HM_LSTM':
     from HM_LSTM_core import HM_LSTM
 elif sys.argv[1] == 'HM_LSTM3':
     from HM_LSTM3_core import HM_LSTM
+elif sys.argv[1] == 'HM_LSTM_fixed':
+    from HM_LSTM_fixed_core import HM_LSTM
 
 version = sys.version_info[0]
 
@@ -190,9 +192,11 @@ for layer_idx in range(model._num_layers):
     summary_dict['summary_tensors'].append("self.control_dictionary['self.L2_forget_gate[%s]']"%layer_idx)
 for layer_idx in range(model._num_layers-1):
     summary_dict['summary_tensors'].append("self.control_dictionary['self.flush_fractions[%s]']"%layer_idx)
-    summary_dict['summary_tensors'].append("self.control_dictionary['self.L2_hard_sigm_arg[%s]']"%layer_idx)
+    #summary_dict['summary_tensors'].append("self.control_dictionary['self.L2_hard_sigm_arg[%s]']"%layer_idx)
 
-logdir = "peganov/HM_LSTM3/effectiveness_clean/logging/first_log"
+model_type = sys.argv[1]
+experiment_name = 'effectiveness_clean'
+logdir = "peganov/" +model_type + '/' + experiment_name + "/logging/first_log"
 model.run(20,                # number of times learning_rate is decreased
           0.9,              # a factor by which learning_rate is decreased
             100,            # each 'train_frequency' steps loss and percent correctly predicted letters is calculated
@@ -201,34 +205,35 @@ model.run(20,                # number of times learning_rate is decreased
             1,              # when train point is obtained validation may be performed
             3,             # when train point percent is calculated results got on averaging_number chunks are averaged
           fixed_number_of_steps=50001,
-            add_operations=['self.train_hard_sigm_arg'],
+            #add_operations=['self.train_hard_sigm_arg'],
           add_text_operations=['self.train_input_print'],
            print_steps = [5000, 10000, 15000, 20000, 25000, 30000, 35000, 40000, 45000, 50000],
-            validation_add_operations = ['self.sigm_arg'],
-            num_validation_prints=10,
+            #validation_add_operations = ['self.sigm_arg'],
+            #num_validation_prints=10,
           validation_example_length=40, 
            #debug=True,
             print_intermediate_results = True,
-          path_to_file_for_saving_prints='peganov/HM_LSTM3/effectiveness_clean/effectiveness_clean.txt',
-           save_path="peganov/HM_LSTM3/effectiveness_clean/variables",
+          path_to_file_for_saving_prints='peganov/' + model_type +'/' + experiment_name + '/effectiveness_clean.txt',
+           save_path="peganov/" + model_type +"/" + experiment_name + "/variables",
              summarizing_logdir=logdir,
             summary_dict=summary_dict,
-           gpu_memory=0.5)
+           gpu_memory=0.4)
 results_GL = list(model._results)
+number_of_plots = 20
 text_list, boundary_list = model.run_for_analitics(model.get_boundaries,
-                                                'peganov/HM_LSTM3/effectiveness_clean/variables',
-                                                [10, 75, None])
+                                                'peganov/' + model_type + '/' + experiment_name + '/variables',
+                                                [number_of_plots, 75, None])
 
-for i in range(20):
+for i in range(number_of_plots):
     text_boundaries_plot(text_list[i],
                             boundary_list[i],
                             'boundaries by layer',
-                            ['peganov', 'HM_LSTM3', 'effectiveness_clean', 'plots'],
+                            ['peganov', model_type, experiment_name, 'plots'],
                             'plot#%s' % i,
                             show=False)
 
-folder_name = 'peganov/HM_LSTM3/effectiveness_clean'
-file_name = 'effectiveness_clean_result.pickle'
+folder_name = 'peganov/' + model_type + '/' + experiment_name
+file_name = experiment_name + '_result.pickle'
 force = True
 pickle_dump = {'results_GL': results_GL}
 if not os.path.exists(folder_name):
