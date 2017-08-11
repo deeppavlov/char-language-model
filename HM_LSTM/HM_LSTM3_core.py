@@ -17,7 +17,6 @@ from model_module import characters
 version = sys.version_info[0]
 
 
-
 from tensorflow.python.framework import dtypes
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import gen_array_ops
@@ -63,45 +62,26 @@ class HM_LSTM(MODEL):
             current_batch_size = bottom_up.get_shape().as_list()[0]
 
             one = tf.constant([[1.]], name="one_constant")
-            # note: in several next operations tf.transpose method is applied repeatedly.
-            #       It was used for broadcasting activation along vectors in same batches
-
             # following operation computes a product z^l_{t-1} x h^{l+1}_{t-1} for formula (6)
-            tr_state2 = tf.transpose(state[2],
-                                     name="transposed_state2_in_top_down_prepaired")
-            tr_top_down = tf.transpose(top_down,
-                                       name="transposed_top_down_in_top_down_prepaired")
+
             with self._graph.gradient_override_map({"Mul": self.gradient_name2}):
-                multiply_in_top_down_prepaired = tf.multiply(tr_state2,
-                                                             tr_top_down,
-                                                             name="multiply_in_top_down_prepaired")
-            top_down_prepaired = tf.transpose(multiply_in_top_down_prepaired,
-                                              name="top_down_prepaired")
+                top_down_prepaired = tf.multiply(state[2],
+                                                 top_down,
+                                                 name="top_down_prepaired")
 
             # this one cumputes a product z^{l-1}_t x h^{l-1}_t for formula (7)
-            tr_boundary_state_down = tf.transpose(boundary_state_down,
-                                                  name="transposed_boundary_state_down_in_bottom_down_prepaired")
-            tr_bottom_up = tf.transpose(bottom_up,
-                                        name="transposed_bottom_up_in_bottom_up_prepaired")
+
             with self._graph.gradient_override_map({"Mul": self.gradient_name2}):
-                multiply_in_bottom_up_prepaired = tf.multiply(tr_boundary_state_down,
-                                                              tr_bottom_up,
-                                                              name="multiply_in_bottom_up_prepaired")
-            bottom_up_prepaired = tf.transpose(multiply_in_bottom_up_prepaired,
-                                               name="bottom_up_prepaired")
+                bottom_up_prepaired = tf.multiply(boundary_state_down,
+                                                  bottom_up,
+                                                  name="bottom_up_prepaired")
             
             # following implements formula (8). Missing (1-z) is added
             boundary_state_reversed = tf.subtract(one, state[2], name="boundary_state_reversed")
-            tr_boundary_state_reversed = tf.transpose(boundary_state_reversed,
-                                                      name="transposed_boundary_state_reversed_in_state0_prepaired")
-            tr_state0 = tf.transpose(state[0],
-                                     name="transposed_state0_state0_prepaired")
             with self._graph.gradient_override_map({"Mul": self.gradient_name2}):
-                multiply_in_state0_prepaired = tf.multiply(tr_boundary_state_reversed,
-                                                           tr_state0,
-                                                           name="multiply_in_state0_prepaired")
-            state0_prepaired = tf.transpose(multiply_in_state0_prepaired,
-                                            name="state0_prepaired")
+                state0_prepaired = tf.multiply(boundary_state_reversed,
+                                               state[0],
+                                               name="state0_prepaired")
             
 
             # Matrix multiplications in formulas (5) - (7) and sum in argument of function f_slice
@@ -157,43 +137,36 @@ class HM_LSTM(MODEL):
             # flush_flag = 1 if FLUSH and 0 otherwise
             # flags, gates and vectors are transposed for broadcasting
             with tf.name_scope('boundary_operations'):
-                update_flag = tf.transpose(tf.to_float(tf.logical_and(tf.equal(state[2],
-                                                                               [[0.]],
-                                                                               name="equal_state2_and_0_in_update_flag"),
-                                                                      tf.equal(boundary_state_down,
-                                                                               [[1.]],
-                                                                               name="equal_boundary_state_down_and_1_in_update_flag"),
-                                                                      name="logical_and_in_update_flag"),
-                                                       name="to_float_in_update_flag"),
+                update_flag = tf.to_float(tf.logical_and(tf.equal(state[2],
+                                                                  [[0.]],
+                                                                  name="equal_state2_and_0_in_update_flag"),
+                                                         tf.equal(boundary_state_down,
+                                                                  [[1.]],
+                                                                  name="equal_boundary_state_down_and_1_in_update_flag"),
+                                                         name="logical_and_in_update_flag"),
                                            name="update_flag")
-                copy_flag = tf.transpose(tf.to_float(tf.logical_and(tf.equal(state[2],
-                                                                             [[0.]],
-                                                                             name="equal_state2_and_0_in_copy_flag"),
-                                                                    tf.equal(boundary_state_down,
-                                                                             [[0.]],
-                                                                             name="equal_boundary_state_down_and_0_in_copy_flag"),
-                                                                    name="logical_and_in_copy_flag"),
-                                                     name="to_float_in_copy_flag"),
-                                         name="copy_flag")
-                flush_flag = tf.transpose(tf.to_float(tf.equal(state[2],
-                                                               [[1.]],
-                                                               name="equal_state2_and_1_in_flush_flag"),
-                                                      name="to_float_in_flush_flag"),
-                                          name="flush_flag")
+                copy_flag = tf.to_float(tf.logical_and(tf.equal(state[2],
+                                                                [[0.]],
+                                                                name="equal_state2_and_0_in_copy_flag"),
+                                                       tf.equal(boundary_state_down,
+                                                                [[0.]],
+                                                                name="equal_boundary_state_down_and_0_in_copy_flag"),
+                                                       name="logical_and_in_copy_flag"),
+                                        name="copy_flag")
+                flush_flag = tf.to_float(tf.equal(state[2],
+                                                  [[1.]],
+                                                  name="equal_state2_and_1_in_flush_flag"),
+                                         name="flush_flag")
                 # constant 'one' is used for building negations
                 one = tf.constant([[1.]], name="one_constant")
-                tr_memory = tf.transpose(state[1], name="tr_memory")
-                tr_forget_gate = tf.transpose(forget_gate, name="tr_forget_gate")
-                tr_input_gate = tf.transpose(input_gate, name="tr_input_gate")
-                tr_output_gate = tf.transpose(output_gate, name="tr_output_gate")
-                tr_modification_vector = tf.transpose(modification_vector, name="tr_modification_vector")
+                memory = state[1]
                 # new memory computation
                 # computing update term
-                update_term_without_flag = tf.add(tf.multiply(tr_forget_gate,
-                                                              tr_memory,
+                update_term_without_flag = tf.add(tf.multiply(forget_gate,
+                                                              memory,
                                                               name="multiply_forget_and_memory_in_update_term"),
-                                                  tf.multiply(tr_input_gate,
-                                                              tr_modification_vector,
+                                                  tf.multiply(input_gate,
+                                                              modification_vector,
                                                               name="multiply_input_and_modification_in_update_term"),
                                                   name="update_term_without_flag")
                 update_term = tf.multiply(update_flag,
@@ -201,37 +174,36 @@ class HM_LSTM(MODEL):
                                           name="update_term")
 
                 # computing copy term
-                copy_term = tf.multiply(copy_flag, tr_memory, name="copy_term")
+                copy_term = tf.multiply(copy_flag, memory, name="copy_term")
 
                 # computing flush term
-                flush_term_without_flag = tf.multiply(tr_input_gate,
-                                                      tr_modification_vector,
+                flush_term_without_flag = tf.multiply(input_gate,
+                                                      modification_vector,
                                                       name="flush_term_without_flag")
                 flush_term = tf.multiply(flush_flag,
                                          flush_term_without_flag,
                                          name="flush_term")
                 
-                tr_new_memory = tf.add(tf.add(update_term,
-                                              copy_term,
-                                              name="add_update_and_copy_in_tr_new_memory"),
-                                       flush_term,
-                                       name="tr_new_memory")
-                new_memory = tf.transpose(tr_new_memory, name="new_memory")
+                new_memory = tf.add(tf.add(update_term,
+                                           copy_term,
+                                           name="add_update_and_copy_in_new_memory"),
+                                    flush_term,
+                                    name="new_memory")
+
                 # new hidden states computation
-                tr_hidden = tf.transpose(state[0], name="tr_hidden")
-                copy_term = tf.multiply(copy_flag, tr_hidden, name="copy_term_for_hidden")
+                hidden = state[0]
+                copy_term = tf.multiply(copy_flag, hidden, name="copy_term_for_hidden")
                     
                 else_flag = tf.subtract(one,
                                         copy_flag,
                                         name="else_flag")
-                else_term_without_flag = tf.multiply(tr_output_gate,
-                                                     tf.tanh(tr_new_memory, name="tanh_in_else_term"),
+                else_term_without_flag = tf.multiply(output_gate,
+                                                     tf.tanh(new_memory, name="tanh_in_else_term"),
                                                      name='else_term_without_flag')
                 else_term = tf.multiply(else_flag,
                                         else_term_without_flag,
                                         name='else_term')
-                new_hidden = tf.transpose(tf.add(copy_term, else_term, name="new_hidden"),
-                                          name="new_hidden")
+                new_hidden = tf.add(copy_term, else_term, name="new_hidden")
                 
                 helper = {"L2_norm_of_hard_sigm_arg": L2_norm_of_hard_sigm_arg,
                           "hard_sigm_arg": hard_sigm_arg,
@@ -251,22 +223,12 @@ class HM_LSTM(MODEL):
             # last layer idx
             last = self._num_layers-1
 
-
-            # note: in several next operations tf.transpose method is applied repeatedly.
-            #       It was used for broadcasting activation along vectors in same batches
-
-
             # this one cumputes a product z^{l-1}_t x h^{l-1}_t for formula (7)
-            tr_boundary_state_down = tf.transpose(boundary_state_down,
-                                                  name="transposed_boundary_state_down_in_bottom_down_prepaired")
-            tr_bottom_up = tf.transpose(bottom_up,
-                                        name="transposed_bottom_up_in_bottom_up_prepaired")
+
             with self._graph.gradient_override_map({"Mul": self.gradient_name2}):
-                multiply_in_bottom_up_prepaired = tf.multiply(tr_boundary_state_down,
-                                                              tr_bottom_up,
-                                                              name="multiply_in_bottom_up_prepaired")
-            bottom_up_prepaired = tf.transpose(multiply_in_bottom_up_prepaired,
-                                               name="bottom_up_prepaired")
+                bottom_up_prepaired = tf.multiply(boundary_state_down,
+                                                  bottom_up,
+                                                  name="bottom_up_prepaired")
             
 
             # Matrix multiplications in formulas (5) - (7) and sum in argument of function f_slice
@@ -307,26 +269,21 @@ class HM_LSTM(MODEL):
             # copy_flag = 1 if COPY and 0 otherwise
             # flags, gates and vectors are transposed for broadcasting
             with tf.name_scope('boundary_operations'):
-                update_flag = tf.transpose(tf.to_float(tf.equal(boundary_state_down,
-                                                                1.,
-                                                                name="equal_boundary_state_down_and_1_in_update_flag"),
-                                                       name="to_float_in_update_flag"),
-                                           name="update_flag")
+                update_flag = tf.to_float(tf.equal(boundary_state_down,
+                                                   1.,
+                                                   name="equal_boundary_state_down_and_1_in_update_flag"),
+                                          name="update_flag")
                 # constant 'one' is used for building negations
                 one = tf.constant([[1.]], name="one_constant")
                 copy_flag = tf.subtract(one, update_flag, name="copy_flag")
-                tr_memory = tf.transpose(state[1], name="tr_memory")
-                tr_forget_gate = tf.transpose(forget_gate, name="tr_forget_gate")
-                tr_input_gate = tf.transpose(input_gate, name="tr_input_gate")
-                tr_output_gate = tf.transpose(output_gate, name="tr_output_gate")
-                tr_modification_vector = tf.transpose(modification_vector, name="tr_modification_gate")
+                memory = state[1]
                 # new memory computation
                 # update term computation
-                update_term_without_flag = tf.add(tf.multiply(tr_forget_gate,
-                                                              tr_memory,
+                update_term_without_flag = tf.add(tf.multiply(forget_gate,
+                                                              memory,
                                                               name="multiply_forget_and_memory_in_update_term"),
-                                                  tf.multiply(tr_input_gate,
-                                                              tr_modification_vector,
+                                                  tf.multiply(input_gate,
+                                                              modification_vector,
                                                               name="multiply_input_and_modification_in_update_term"),
                                                   name="update_term_without_flag")
                 update_term = tf.multiply(update_flag,
@@ -334,30 +291,29 @@ class HM_LSTM(MODEL):
                                           name="update_term")
                     
                 # copy_term computation
-                copy_term = tf.multiply(copy_flag, tr_memory, name="copy_term")
-                tr_new_memory = tf.add(update_term,
-                                       copy_term,
-                                       name="tr_new_memory")
-                new_memory = tf.transpose(tr_new_memory, name="new_memory")
+                copy_term = tf.multiply(copy_flag, memory, name="copy_term")
+                new_memory = tf.add(update_term,
+                                    copy_term,
+                                    name="new_memory")
+
                 # new hidden states computation
-                tr_hidden = tf.transpose(state[0], name="tr_hidden")
+                hidden = state[0]
                 
                 # copy_term computation
-                copy_term = tf.multiply(copy_flag, tr_hidden, name="copy_term_for_hidden")
+                copy_term = tf.multiply(copy_flag, hidden, name="copy_term_for_hidden")
                     
                     
                 else_flag = tf.subtract(one,
                                         copy_flag,
                                         name="else_flag")
-                else_term_without_flag = tf.multiply(tr_output_gate,
-                                                     tf.tanh(tr_new_memory, name="tanh_in_else_term"),
+                else_term_without_flag = tf.multiply(output_gate,
+                                                     tf.tanh(new_memory, name="tanh_in_else_term"),
                                                      name='else_term_without_flag')
                 else_term = tf.multiply(else_flag,
                                         else_term_without_flag,
                                         name='else_term')
                     
-                new_hidden = tf.transpose(tf.add(copy_term, else_term, name="new_hidden"),
-                                          name="new_hidden")
+                new_hidden = tf.add(copy_term, else_term, name="new_hidden")
                 helper = {"L2_forget_gate": L2_forget_gate}
         return new_hidden, new_memory, helper
      
@@ -517,27 +473,25 @@ class HM_LSTM(MODEL):
     
     def output_module(self,
                       hidden_states):
+        # hidden_states is list of hidden_states by layer, concatenated along batch dimension
         with tf.name_scope('output_module'):
             concat = tf.concat(hidden_states, 1, name="total_concat_hidden")
-            output_module_gates = tf.transpose(tf.sigmoid(tf.matmul(concat,
-                                                                    self.output_module_gates_weights,
-                                                                    name="matmul_in_output_module_gates"),
-                                                          name="sigmoid_in_output_module_gates"),
-                                               name="output_module_gates")
+            output_module_gates = tf.sigmoid(tf.matmul(concat,
+                                                       self.output_module_gates_weights,
+                                                       name="matmul_in_output_module_gates"),
+                                             name="output_module_gates")
             output_module_gates = tf.split(output_module_gates,
                                            self._num_layers,
-                                           axis=0,
+                                           axis=1,
                                            name="split_of_output_module_gates")
-            tr_gated_hidden_states = list()
+            gated_hidden_states = list()
             for idx, hidden_state in enumerate(hidden_states):
-                tr_hidden_state = tf.transpose(hidden_state, name="tr_hidden_state_total_%s"%idx)
-                tr_gated_hidden_states.append(tf.multiply(output_module_gates[idx],
-                                                          tr_hidden_state,
-                                                          name="tr_gated_hidden_states_%s"%idx))
-            gated_hidden_states = tf.transpose(tf.concat(tr_gated_hidden_states,
-                                                         0,
-                                                         name="concat_in_gated_hidden_states"),
-                                               name="gated_hidden_states")
+                gated_hidden_states.append(tf.multiply(output_module_gates[idx],
+                                                       hidden_state,
+                                                       name="gated_hidden_states_%s"%idx))
+            gated_hidden_states = tf.concat(gated_hidden_states,
+                                            1,
+                                            name="gated_hidden_states")
             output_embeddings = tf.nn.relu(tf.add(tf.matmul(gated_hidden_states,
                                                             self.output_embedding_weights,
                                                             name="matmul_in_output_embeddings"),
@@ -792,10 +746,8 @@ class HM_LSTM(MODEL):
                         y = math_ops.conj(y)
                         not_modified_1 = array_ops.reshape(math_ops.reduce_sum(grad * y, rx), sx)
                         not_modified_2 = array_ops.reshape(math_ops.reduce_sum(x * grad, ry), sy)
-                        tr_not_modified_2 = array_ops.transpose(not_modified_2)
-                        tr_x = array_ops.transpose(x)
                         modified_1 = math_ops.multiply(not_modified_1, x)
-                        modified_2 = array_ops.transpose(math_ops.multiply(tr_x, tr_not_modified_2))
+                        modified_2 = math_ops.multiply(not_modified_2, x)
                         return (modified_1,
                                 modified_2)
                     
