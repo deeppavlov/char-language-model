@@ -137,37 +137,39 @@ string_vocabulary = u""
 for i in range(vocabulary_size):
     string_vocabulary += vocabulary[i]
 
-
+num_nodes = 412
+model_type = 'LSTM_all'
+experiment_name = 'effectiveness_clean_long'
 model = LSTM(64,
                  vocabulary,
                  characters_positions_in_vocabulary,
-                 100,
+                 300,
                  3,
-                 [256, 256, 256],
+                 [num_nodes, num_nodes, num_nodes],
                  train_text,
                  valid_text,
                 init_parameter=1e-6,
                  matr_init_parameter=100000)
 
 
-model.run(20,                # number of times learning_rate is decreased
-          0.9,              # a factor by which learning_rate is decreased
-            100,            # each 'train_frequency' steps loss and percent correctly predicted letters is calculated
-            500,             # minimum number of times loss and percent correctly predicted letters are calculated while learning (train points)
+model.run(8,                # number of times learning_rate is decreased
+          0.5,              # a factor by which learning_rate is decreased
+            1000,            # each 'train_frequency' steps loss and percent correctly predicted letters is calculated
+            200,             # minimum number of times loss and percent correctly predicted letters are calculated while learning (train points)
             3,              # if during half total spent time loss decreased by less than 'stop_percent' percents learning process is stopped
             1,              # when train point is obtained validation may be performed
             3,             # when train point percent is calculated results got on averaging_number chunks are averaged
-          fixed_number_of_steps=50001,
+          fixed_number_of_steps=200001,
           validation_example_length=40, 
            #debug=True,
             print_intermediate_results = True,
-          path_to_file_for_saving_prints='peganov/LSTM_all/effectiveness_clean/effectiveness_clean.txt',
-           save_path="peganov/LSTM_all/effectiveness_clean/variables",
-           gpu_memory=0.4)
+          path_to_file_for_saving_prints='peganov/' + model_type +'/'+ experiment_name + '/effectiveness_clean.txt',
+           save_path='peganov/' + model_type +'/'+ experiment_name + '/variables',
+           gpu_memory=1.)
 results_GL = list(model._results)
 
-folder_name = 'peganov/LSTM_all/effectiveness_clean'
-file_name = 'effectiveness_clean_result.pickle'
+folder_name = 'peganov/' + model_type +'/'+ experiment_name
+file_name = experiment_name + '_result.pickle'
 force = True
 pickle_dump = {'results_GL': results_GL}
 if not os.path.exists(folder_name):

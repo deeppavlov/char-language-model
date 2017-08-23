@@ -850,10 +850,14 @@ class HM_LSTM(MODEL):
                                                                      self._decay,
                                                                      staircase=True,
                                                                      name="learning_rate")
-                    #optimizer = tf.train.GradientDescentOptimizer(self._learning_rate)
+                    regularizer = tf.contrib.layers.l2_regularizer(.5)
+                    l2_loss = regularizer(self.output_embedding_weights)
+                    output_embedding_weights_shape = self.output_embedding_weights.get_shape().as_list()
+                    l2_divider = float(output_embedding_weights_shape[0] * output_embedding_weights_shape[1])
+                    #optimizer = tf.train.GradientDescentOptimizer(self._learning_rate)                    
                     optimizer = tf.train.AdamOptimizer(learning_rate=self._learning_rate)
-                    gradients, v = zip(*optimizer.compute_gradients(self._loss))
-                    gradients, _ = tf.clip_by_global_norm(gradients, 1.25)
+                    gradients, v = zip(*optimizer.compute_gradients(self._loss + l2_loss / l2_divider))
+                    gradients, _ = tf.clip_by_global_norm(gradients, 1.)
                     """optimizer"""
                     self._optimizer = optimizer.apply_gradients(zip(gradients, v), global_step=self._global_step)
                     """train prediction"""
