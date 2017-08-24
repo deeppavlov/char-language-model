@@ -23,6 +23,9 @@ from plot_module import ComparePlots
 
 from model_module import maybe_download
 from model_module import read_data
+from model_module import create_vocabulary
+from model_module import get_positions_in_vocabulary
+from model_module import filter_text
 from model_module import check_not_one_byte
 from model_module import id2char
 from model_module import char2id
@@ -81,33 +84,34 @@ if sys.argv[2] == 'dirty':
         print("max order index: ", max_character_order_index)
         print("total number of characters: ", number_of_characters)
     
-        f = open('enwik8_filtered', 'wb')
-        f.write(text.encode('utf8'))
+        f = open('enwik8_filtered', 'w', encoding='utf-8')
+        f.write(text)
         f.close()
     
     else:
-
-        f = open('enwik8_filtered', 'rb')
-        text = f.read().decode('utf8')
+        f = open('enwik8_filtered', 'r', encoding='utf-8')
+        text = f.read()
         f.close() 
-        (not_one_byte_counter, min_character_order_index, max_character_order_index, number_of_characters, present_characters_indices) = check_not_one_byte(text)
+
 elif sys.argv[2] == 'clean':
     if not os.path.exists('enwik8_clean'):
         if not os.path.exists('enwik8'):
             filename = maybe_download('enwik8.zip', 36445475)
             full_text = read_data(filename)
-            f = open('enwik8', 'wb')
-            f.write(full_text.encode('utf8'))
+            f = open('enwik8_clean', 'w', encoding='utf-8')
+            f.write(full_text)
             f.close()       
         perl_script = subprocess.call(['perl', "clean.pl", 'enwik8', 'enwik8_clean'])
-    f = open('enwik8_clean', 'rb')
-    text = f.read().decode('utf8')
-    print(len(text))
+    f = open('enwik8_clean', 'r', encoding='utf-8')
+    text = f.read()
+    print('length of text:', len(text))
     f.close() 
     (not_one_byte_counter, min_character_order_index, max_character_order_index, number_of_characters, present_characters_indices) = check_not_one_byte(text)
 
 else:
-    raise CommandLineInput("3rd command line argument indicating dataset type is wrong.\nUse either 'clean' or 'dirty'")
+    f = open(sys.argv[2], 'r', encoding='utf-8')
+    text = f.read()
+    f.close() 
 
 
 #different
@@ -120,40 +124,20 @@ train_size = len(train_text)
 
 # In[5]:
 
-
-vocabulary_size = number_of_characters
-vocabulary = list()
-characters_positions_in_vocabulary = list()
-
-character_position_in_vocabulary = 0
-for i in range(256):
-    if present_characters_indices[i]:
-        if version >= 3:
-            vocabulary.append(chr(i))
-        else:
-            vocabulary.append(unichr(i))
-        characters_positions_in_vocabulary.append(character_position_in_vocabulary)
-        character_position_in_vocabulary += 1
-    else:
-        characters_positions_in_vocabulary.append(-1)
-
-print('vocabulary_size: ', vocabulary_size)
-string_vocabulary = u""
-for i in range(vocabulary_size):
-    string_vocabulary += vocabulary[i]
-
-
-# In[6]:
+vocabulary = create_vocabulary(text)
+vocabulary_size = len(vocabulary)
+characters_positions_in_vocabulary = get_positions_in_vocabulary(vocabulary)
+print(vocabulary)
 
 
 
-num_nodes = 412
+num_nodes = 512
 
 
 model = HM_LSTM(64,
                  vocabulary,
                  characters_positions_in_vocabulary,
-                 300,
+                 150,
                  3,
                  [num_nodes, num_nodes, num_nodes],
                  1.,               # init_slope
@@ -197,14 +181,14 @@ for layer_idx in range(model._num_layers-1):
 model_type = sys.argv[1]
 experiment_name = 'effectiveness_clean_long'
 logdir = "peganov/" +model_type + '/' + experiment_name + "/logging/first_log"
-model.run(8,                # number of times learning_rate is decreased
+model.run(7,                # number of times learning_rate is decreased
           0.5,              # a factor by which learning_rate is decreased
             1000,            # each 'train_frequency' steps loss and percent correctly predicted letters is calculated
             200,             # minimum number of times loss and percent correctly predicted letters are calculated while learning (train points)
             3,              # if during half total spent time loss decreased by less than 'stop_percent' percents learning process is stopped
             1,              # when train point is obtained validation may be performed
             3,             # when train point percent is calculated results got on averaging_number chunks are averaged
-          fixed_number_of_steps=200001,
+          fixed_number_of_steps=100001,
             #add_operations=['self.train_hard_sigm_arg'],
           #add_text_operations=['self.train_input_print'],
            #print_steps = [5000*i for i in range(40)],

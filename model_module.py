@@ -95,13 +95,40 @@ def check_not_one_byte(text):
             min_character_order_index = ord(char)
     return not_one_byte_counter, min_character_order_index, max_character_order_index, number_of_characters, present_characters
 
+def create_vocabulary(text):
+    all_characters = list()
+    for char in text:
+        if char not in all_characters:
+            all_characters.append(char)
+    return sorted(all_characters, key=lambda dot: ord(dot))
+
+def get_positions_in_vocabulary(vocabulary):
+    characters_positions_in_vocabulary = dict()
+    for idx, char in enumerate(vocabulary):
+        characters_positions_in_vocabulary[char] = idx
+    return characters_positions_in_vocabulary
+
+def filter_text(text, allowed_letters):
+    new_text = ""
+    for char in text:
+        if char in allowed_letters:
+            new_text += char
+    return new_text 
+
 
 def char2id(char, characters_positions_in_vocabulary):
-  if characters_positions_in_vocabulary[ord(char)] != -1:
-    return characters_positions_in_vocabulary[ord(char)]
+  if char in characters_positions_in_vocabulary:
+    return characters_positions_in_vocabulary[char]
   else:
     print(u'Unexpected character: %s\nUnexpected character number: %s\nUnexpected character has its place = %s\n' % (char, ord(char), present_characters_indices[i]))
-    return characters_positions_in_vocabulary[ord(char)]
+    return None
+
+def char2vec(char, characters_positions_in_vocabulary):
+  voc_size = len(characters_positions_in_vocabulary)
+  vec = np.zeros(shape=(1, voc_size), dtype=np.float)
+  vec[0, char2id(char, characters_positions_in_vocabulary)] = 1.0
+  return vec
+
 
 def id2char(dictid, vocabulary):
   voc_size = len(vocabulary)
@@ -122,7 +149,13 @@ class BatchGenerator(object):
     self._num_unrollings = num_unrollings
     segment = self._text_size // batch_size
     self._cursor = [ offset * segment for offset in range(batch_size)]
-    self._last_batch = self._next_batch()
+    self._last_batch = self._start_batch()
+
+  def _start_batch(self):
+    batch = np.zeros(shape=(self._batch_size, self._vocabulary_size), dtype=np.float)
+    for b in range(self._batch_size):
+      batch[b, char2id('\n', self._characters_positions_in_vocabulary)] = 1.0
+    return batch    
   
   def _next_batch(self):
     """Generate a single batch from the current cursor position in the data."""
@@ -399,6 +432,12 @@ class MODEL(object):
         
         return data_for_plot
 
+    def split_to_path_name(self, path):
+        parts = path.split('/')
+        name = parts[-1]
+        path = '/'.join(parts[:-1])
+        return path, name 
+
     def create_path(self, path):
         folder_list = path.split('/')[:-1]
         if len(folder_list) > 0:
@@ -407,7 +446,35 @@ class MODEL(object):
                 if idx > 0:
                     current_folder += ('/' + folder)
                 if not os.path.exists(current_folder):
-                    os.mkdir(current_folder)        
+                    os.mkdir(current_folder)
+
+    def loop_through_indices(self, filename, start_index):
+        path, name = self.split_to_path_name(filename)
+        if '.' in name:
+            inter_list = name.split('.')
+            extension = inter_list[-1]
+            base = '.'.join(inter_list[:-1])
+            base += '#%s' 
+            name = '.'.join([base, extension])
+            
+        else:
+            name += '#%s'
+        if path != '':
+            base_path = '/'.join([path, name])
+        else:
+            base_path = name
+        index = start_index    
+        while os.path.exists(base_path % index):
+            index += 1
+        return base_path % index
+
+    def add_index_to_filename_if_needed(self, filename, index=None):
+        if index is not None:
+            return self.loop_through_indices(filename, index) 
+        if os.path.exists(filename):
+            return self.loop_through_indices(filename, 1)
+        return filename
+                       
         
     def save_graph(self, session, save_path):
         self.create_path(save_path)
@@ -516,13 +583,7 @@ class MODEL(object):
                 with open(path + '/' + name, 'wb') as f:
                     pickle.dump(dictionary, f, pickle.HIGHEST_PROTOCOL)
         except Exception as e:
-            print('Unable to save data to', name, ':', e)  
-
-    def split_to_path_name(self, path):
-        parts = path.split('/')
-        name = parts[-1]
-        path = '/'.join(parts[:-1])
-        return path, name            
+            print('Unable to save data to', name, ':', e)             
         
         
     def run(self,
@@ -552,7 +613,7 @@ class MODEL(object):
             path_to_file_for_saving_prints=None,              # path to file where everything apointed for printing is saved
             collection_operations=None,                       # a list of tuples. Each tuple contains two elements. First is operation name. Second indicates if operation encodes text or not ('text', 'number'). If 'text' before adding to collection numpy array will be transformed to str
             collection_steps=None,
-            path_to_file_for_saving_collection=None,          # all add operations results will be added to a dictionary which will pickled
+            path_to_file_for_saving_collection=None,          # all add operations results will be added to a dictionary which will be pickled
             summarizing_logdir=None,                          # 'summarizing_logdir' is a path to directory for storing summaries
             summary_dict=None,                                # a dictionary containing 'summaries_collection_frequency', 'summary_tensors'
                                                               # every 'summaries_collection_frequency'-th step summary is collected 
@@ -1043,6 +1104,89 @@ class MODEL(object):
                sum(data_for_plot["train"]["percentage"][-1: -1 - min_num_points // 5: -1]) / (min_num_points // 5),
                run_result["time"],
                lr))
+
+    def model_parameters_dump(self):
+        dump = ""
+        dump += "\n\nMODEL PARAMETERS\n" 
+        dump += "number of layers: %s\n" % self._num_layers
+        num_nodes_template = "number of nodes: ["
+        for _ in range(self._num_layers):
+            num_nodes_template += '%s ,'
+        num_nodes_template = num_nodes_template[:-2] + ']\n'
+        dump += num_nodes_template % tuple(self._num_nodes)
+        dump += "number of unrollings: %s\n" % self._num_unrollings
+        dump += "number of batch size: %s\n" % self._batch_size
+        dump += "embedding size: %s\n" % self._embedding_size
+        dump += "output embedding size: %s\n" % self._output_embedding_size
+        dump += "init_parameter: %s\n" % self._init_parameter
+        dump += "matr_init_parameter: %s\n" % self._matr_init_parameter
+        dump += '\n'
+        return dump
+
+
+    def inference(self, log_path, checkpoint_path=None, gpu_memory=None, appending=True, add_model_parameters=True):
+        self.create_path(log_path)
+        if not appending:
+            log_path = self.add_index_to_filename_if_needed(log_path)
+        if appending:
+            file_object = open(log_path, 'a')
+        else:
+            file_object = open(log_path, 'w')
+
+        def print_and_log(*inputs, log=True, _print=True):
+            if _print:
+                print(*inputs)
+            if log:
+                for inp in inputs:
+                    file_object.write(str(inp))
+                file_object.write('\n')  
+        config = tf.ConfigProto(allow_soft_placement=True,
+                                log_device_placement=False)
+        if gpu_memory is not None:
+            config.gpu_options.per_process_gpu_memory_fraction = gpu_memory
+
+
+        file_object.write('\n*********************')
+        if add_model_parameters:
+            file_object.write(self.model_parameters_dump())
+
+        with tf.Session(graph=self._graph, config=config) as session:
+            if checkpoint_path is None:
+                print_and_log('Skipping variables restoring. Continueing on current variables values')
+            else:
+                print('restoring from %s' % checkpoint_path)
+                self.saver.restore(session, checkpoint_path)
+            self._reset_sample_state.run()
+            human_replica = input('Human: ')
+            while not human_replica == 'FINISH':
+                print_and_log('Human: '+human_replica, _print=False)
+                for char in human_replica:
+                    feed = char2vec(char, self._characters_positions_in_vocabulary) 
+                    _ = self._sample_prediction.eval({self._sample_input: feed}) 
+
+                # language generation
+                feed = char2vec('\n', self._characters_positions_in_vocabulary)  
+                prediction = self._sample_prediction.eval({self._sample_input: feed})
+                counter = 0
+                char = None
+                bot_replica = ""
+                while char != '\n' or counter > 500: 
+                    feed = sample(prediction, self._vocabulary_size)
+                    prediction = self._sample_prediction.eval({self._sample_input: feed})
+                    char = characters(feed, self._vocabulary)[0]   
+                    if char != '\n':
+                        bot_replica += char
+                    counter += 1
+                print_and_log('Bot: '+bot_replica)
+                feed = char2vec('\n', self._characters_positions_in_vocabulary)  
+                _ = self._sample_prediction.eval({self._sample_input: feed}) 
+
+                human_replica = input('Human: ')
+
+        file_object.write('\n*********************')
+        file_object.close()
+                                     
+                      
 
     def plot(self, xlists, ylists, labels, y_label, title=None, save_folder=None, show=False):
         plt.close()
