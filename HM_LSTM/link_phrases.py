@@ -54,25 +54,17 @@ split_regex = '(' + split_regex[:-1] +')'
 input_f = open(input_filename, 'r', encoding='utf-8')
 
 text = input_f.read()
-print('split_regex: ', split_regex)
 lines = re.split(split_regex, text)
-print('number of lines:', len(lines))
-for i in range(100):
-    print('line[%s]' % i, lines[i])
 
 new_text = ""
 
 filter_regex = '[^' + allowed_characters_string + ']'
 for i, line in enumerate(lines):
-    if i < 100:
-        print('type of line[%s]:'%i, get_string_type(line))
     if get_string_type(line) == 1:
         new_text += '\n'
         filtered = re.sub(filter_regex, ' ', line)
         filtered = re.sub(' +', ' ', filtered)
         filtered = remove_leading_and_trailing(filtered)
-        if i < 100:
-            print('filtered[%s]:' % i, filtered)
         new_text += filtered
     elif get_string_type(line) == 2:
         new_text += line
