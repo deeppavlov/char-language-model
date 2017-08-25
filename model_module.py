@@ -505,7 +505,8 @@ class MODEL(object):
                    optional_feed_dict=None,
                    half_life_fixed=False,
                    fixed_num_steps=False,
-                   gpu_memory=None):
+                   gpu_memory=None,
+                   pickle_path=None):
         config = tf.ConfigProto(allow_soft_placement=False,
                                 log_device_placement=False)
         if gpu_memory is not None:
@@ -553,6 +554,9 @@ class MODEL(object):
                                                              decay,
                                                              num_averaging_iterations,
                                                              optional_feed_dict) 
+        if pickle_path is not None:
+            path_to_folder, pickle_name = self.split_to_path_name(pickle_path)
+            self.pickle(path_to_folder, pickle_name, {'result': run_result}) 
         self._results.append(run_result)
         
         print("Number of steps = %s     Percentage = %.2f%%     Time = %.fs     Learning rate = %.4f" % 
