@@ -610,6 +610,7 @@ class MODEL(object):
             allow_soft_placement=False,
             log_device_placement=False,                       # passed to tf.ConfigProto
             save_path=None,                                   # path to file which will be used for saving graph. If path does not exist it will be created
+            pickle_path=None,
             path_to_file_for_saving_prints=None,              # path to file where everything apointed for printing is saved
             collection_operations=None,                       # a list of tuples. Each tuple contains two elements. First is operation name. Second indicates if operation encodes text or not ('text', 'number'). If 'text' before adding to collection numpy array will be transformed to str
             collection_steps=None,
@@ -920,7 +921,7 @@ class MODEL(object):
                             if print_intermediate_results or (path_to_file_for_saving_prints is not None):
                                 choose_where_to_print('Average loss at step %d: %f learning rate: %f' % (step, mean_loss, lr))
                                 choose_where_to_print('Percentage_of correct: %.2f%%' % average_percentage_of_correct)
-                                if step % (train_frequency * num_train_points_per_1_validation_point * 10) == 0:
+                                if step % (train_frequency * num_train_points_per_1_validation_point * 1) == 0:                   # here frequency of examples is regulated
                                     # Generate some samples.
                                     choose_where_to_print("\nrandom:")
                                     choose_where_to_print('=' * 80)
@@ -1084,6 +1085,7 @@ class MODEL(object):
         if path_to_file_for_saving_collection is not None:
             path_to_folder, pickle_name = self.split_to_path_name(path_to_file_for_saving_collection)
             self.pickle(path_to_folder, pickle_name, collection_dictionary)
+
         self._last_num_steps = step
         run_result = {"metadata": list(), "data": data_for_plot, "time": (finish_time - start_time)}
 
@@ -1095,7 +1097,11 @@ class MODEL(object):
             run_result["metadata"] = self._generate_metadata(half_life,
                                                              decay,
                                                              averaging_number,
-                                                             optional_feed_dict) 
+                                                             optional_feed_dict)
+
+        if pickle_path is not None:
+            path_to_folder, pickle_name = self.split_to_path_name(pickle_path)
+            self.pickle(path_to_folder, pickle_name, {'result': run_result}) 
         self._results.append(run_result)
 
         
