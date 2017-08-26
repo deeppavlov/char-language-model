@@ -120,7 +120,7 @@ def char2id(char, characters_positions_in_vocabulary):
   if char in characters_positions_in_vocabulary:
     return characters_positions_in_vocabulary[char]
   else:
-    print(u'Unexpected character: %s\nUnexpected character number: %s\nUnexpected character has its place = %s\n' % (char, ord(char), present_characters_indices[i]))
+    print(u'Unexpected character: %s\nUnexpected character number: %s\n' 
     return None
 
 def char2vec(char, characters_positions_in_vocabulary):
