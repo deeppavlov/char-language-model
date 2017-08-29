@@ -23,6 +23,9 @@ from plot_module import ComparePlots
 
 from model_module import maybe_download
 from model_module import read_data
+from model_module import create_vocabulary
+from model_module import get_positions_in_vocabulary
+from model_module import filter_text
 from model_module import check_not_one_byte
 from model_module import id2char
 from model_module import char2id
@@ -33,8 +36,6 @@ from model_module import logprob
 from model_module import sample_distribution
 
 
-from LSTM_all_core import LSTM
-
 version = sys.version_info[0]
 
 class CommandLineInput(Exception):
@@ -43,9 +44,15 @@ class CommandLineInput(Exception):
     def __str__(self):
         return repr(self.value)
 
-if len(sys.argv) < 2:
-    raise CommandLineInput("2nd command line argument indicating dataset type is missing.\nUse either 'clean' or 'dirty'")
-if sys.argv[1] == 'dirty':
+if sys.argv[1] == 'LSTM_all':
+    from LSTM_all_core import LSTM
+elif sys.argv[1] == 'LSTM_stacked':
+    from LSTM_stacked_core import LSTM
+
+
+if len(sys.argv) < 3:
+    raise CommandLineInput("3rd command line argument indicating dataset type is missing.\nUse either 'clean' or 'dirty'")
+if sys.argv[2] == 'dirty':
     if not os.path.exists('enwik8_filtered'):
         if not os.path.exists('enwik8'):
             filename = maybe_download('enwik8.zip', 36445475)
@@ -86,7 +93,7 @@ if sys.argv[1] == 'dirty':
         text = f.read().decode('utf8')
         f.close() 
         (not_one_byte_counter, min_character_order_index, max_character_order_index, number_of_characters, present_characters_indices) = check_not_one_byte(text)
-elif sys.argv[1] == 'clean':
+elif sys.argv[2] == 'clean':
     if not os.path.exists('enwik8_clean'):
         if not os.path.exists('enwik8'):
             filename = maybe_download('enwik8.zip', 36445475)
@@ -102,7 +109,10 @@ elif sys.argv[1] == 'clean':
     (not_one_byte_counter, min_character_order_index, max_character_order_index, number_of_characters, present_characters_indices) = check_not_one_byte(text)
 
 else:
-    raise CommandLineInput("2nd command line argument indicating dataset type is wrong.\nUse either 'clean' or 'dirty'")
+    f = open(sys.argv[2], 'r', encoding='utf-8')
+    text = f.read()
+    f.close() 
+
 
 
 #different
@@ -116,34 +126,18 @@ train_size = len(train_text)
 # In[5]:
 
 
-vocabulary_size = number_of_characters
-vocabulary = list()
-characters_positions_in_vocabulary = list()
+vocabulary = create_vocabulary(text)
+vocabulary_size = len(vocabulary)
+characters_positions_in_vocabulary = get_positions_in_vocabulary(vocabulary)
+print(vocabulary)
 
-character_position_in_vocabulary = 0
-for i in range(256):
-    if present_characters_indices[i]:
-        if version >= 3:
-            vocabulary.append(chr(i))
-        else:
-            vocabulary.append(unichr(i))
-        characters_positions_in_vocabulary.append(character_position_in_vocabulary)
-        character_position_in_vocabulary += 1
-    else:
-        characters_positions_in_vocabulary.append(-1)
-
-print('vocabulary_size: ', vocabulary_size)
-string_vocabulary = u""
-for i in range(vocabulary_size):
-    string_vocabulary += vocabulary[i]
-
-num_nodes = 412
-model_type = 'LSTM_all'
+num_nodes = 12
+model_type = sys.argv[1]
 experiment_name = 'effectiveness_clean_long'
 model = LSTM(64,
                  vocabulary,
                  characters_positions_in_vocabulary,
-                 300,
+                 30,
                  3,
                  [num_nodes, num_nodes, num_nodes],
                  train_text,

@@ -19,14 +19,6 @@ version = sys.version_info[0]
 
 
 
-# In[19]:
-
-
-# This class implements hierarchical LSTM described in the paper https://arxiv.org/pdf/1609.01704.pdf
-# All variables names and formula indices are taken from mentioned article
-# notation A^i stands for A with upper index i
-# notation A_i stands for A with lower index i
-# notation A^i_j stands for A with upper index i and lower index j
 class LSTM(MODEL):
     
     
@@ -117,42 +109,20 @@ class LSTM(MODEL):
         with tf.name_scope('RNN_module'):
             # 'saved_hidden_states' is a list of self._num_layers elements. idx-th element of the list is 
             # a concatenation of hidden states on idx-th layer along chunk of input text.
-            saved_hidden_states = list()
-            for _ in range(self._num_layers):
-                saved_hidden_states.append(list())
+            last_hidden_states = list()
             state = saved_state
             for emb_idx, emb in enumerate(embedded_inputs):
                 state  = self.iteration(emb, state, emb_idx)
-                for layer_state, saved_hidden in zip(state, saved_hidden_states):
-                    saved_hidden.append(layer_state[0])
-            for idx, layer_saved in enumerate(saved_hidden_states):
-                saved_hidden_states[idx] = tf.concat(layer_saved, 0, name="hidden_concat_in_RNN_module_on_layer%s"%idx)
+                last_hidden_states.append(state[-1][0])
+            last_hidden_states = tf.concat(last_hidden_states, 0, name="hidden_concat_in_RNN_module")
 
-            return state, saved_hidden_states
+            return state, last_hidden_states
             
     
     def output_module(self,
-                      hidden_states):
-        # hidden_states is list of hidden_states by layer, concatenated along batch dimension
+                      hidden_state):
         with tf.name_scope('output_module'):
-            concat = tf.concat(hidden_states, 1, name="total_concat_hidden")
-            output_module_gates = tf.sigmoid(tf.matmul(concat,
-                                                       self.output_module_gates_weights,
-                                                       name="matmul_in_output_module_gates"),
-                                             name="output_module_gates")
-            output_module_gates = tf.split(output_module_gates,
-                                           self._num_layers,
-                                           axis=1,
-                                           name="split_of_output_module_gates")
-            gated_hidden_states = list()
-            for idx, hidden_state in enumerate(hidden_states):
-                gated_hidden_states.append(tf.multiply(output_module_gates[idx],
-                                                       hidden_state,
-                                                       name="gated_hidden_states_%s"%idx))
-            gated_hidden_states = tf.concat(gated_hidden_states,
-                                            1,
-                                            name="gated_hidden_states")
-            output_embeddings = tf.nn.relu(tf.add(tf.matmul(gated_hidden_states,
+            output_embeddings = tf.nn.relu(tf.add(tf.matmul(hidden_state,
                                                             self.output_embedding_weights,
                                                             name="matmul_in_output_embeddings"),
                                                   self.output_embedding_bias,
@@ -176,9 +146,9 @@ class LSTM(MODEL):
                  valid_text,
                  embedding_size=128,
                  output_embedding_size=1024,
-                 init_parameter=1.,               # init_parameter is used for balancing stddev in matrices initialization
+                 init_parameter=1e-6,               # init_parameter is used for balancing stddev in matrices initialization
                                                   # and initial learning rate
-                 matr_init_parameter=1000.):
+                 matr_init_parameter=10000.):
         self._results = list()
         self._batch_size = batch_size
         self._vocabulary = vocabulary
@@ -251,14 +221,9 @@ class LSTM(MODEL):
                                                                 name=init_bias_name%(i+1)),
                                                        name=bias_name%(i+1)))
 
-                dim_classifier_input = sum(self._num_nodes)
+                dim_classifier_input = self._num_nodes[-1]
                 
                 # output module variables
-                # output module gates weights (w^l vectors in (formula (11)))
-                self.output_module_gates_weights = tf.Variable(tf.truncated_normal([dim_classifier_input, self._num_layers],
-                                                                                   stddev = math.sqrt(self._init_parameter*matr_init_parameter/dim_classifier_input),
-                                                                                   name="output_gates_weights_initializer"),
-                                                               name="output_gates_weights")
                 # classifier 
                 self.output_embedding_weights = tf.Variable(tf.truncated_normal([dim_classifier_input, self._output_embedding_size],
                                                                                 stddev=math.sqrt(self._init_parameter*matr_init_parameter/dim_classifier_input),
@@ -365,7 +330,7 @@ class LSTM(MODEL):
                     #optimizer = tf.train.GradientDescentOptimizer(self._learning_rate)                    
                     optimizer = tf.train.AdamOptimizer(learning_rate=self._learning_rate)
                     gradients, v = zip(*optimizer.compute_gradients(self._loss + l2_loss / l2_divider))
-                    gradients, _ = tf.clip_by_global_norm(gradients, 1.)
+                    gradients, _ = tf.clip_by_global_norm(gradients, 1.25)
                     """optimizer"""
                     self._optimizer = optimizer.apply_gradients(zip(gradients, v), global_step=self._global_step)
                     """train prediction"""
@@ -446,9 +411,7 @@ class LSTM(MODEL):
         metadata.append(self._output_embedding_size)
         metadata.append(self._init_parameter)
         metadata.append(self._matr_init_parameter)
-        metadata.append('LSTM_all')
+        metadata.append('LSTM_stacked')
         return metadata
-
-
 
 
