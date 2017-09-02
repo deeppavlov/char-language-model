@@ -312,14 +312,7 @@ class MODEL(object):
             if save_steps is not None:
                 if step in save_steps:
                     current_save_path = save_path + str(step)
-                    folder_list = current_save_path.split('/')[:-1]
-                    if len(folder_list) > 0:
-                        current_folder = folder_list[0]
-                        for idx, folder in enumerate(folder_list):
-                            if idx > 0:
-                                current_folder += ('/' + folder)
-                            if not os.path.exists(current_folder):
-                                os.mkdir(current_folder)
+                    self.create_path(current_save_path)
                     self.saver.save(session, current_save_path)
 
             if not fixed_num_steps:
@@ -614,6 +607,8 @@ class MODEL(object):
             allow_soft_placement=False,
             log_device_placement=False,                       # passed to tf.ConfigProto
             save_path=None,                                   # path to file which will be used for saving graph. If path does not exist it will be created
+            save_steps=None,                                  # steps at which model is saved into save_path + str(save_steps[i])
+            restore_path=None,                                # path to checkpoint from which model will be restored
             pickle_path=None,
             path_to_file_for_saving_prints=None,              # path to file where everything apointed for printing is saved
             collection_operations=None,                       # a list of tuples. Each tuple contains two elements. First is operation name. Second indicates if operation encodes text or not ('text', 'number'). If 'text' before adding to collection numpy array will be transformed to str
@@ -690,7 +685,10 @@ class MODEL(object):
             if debug:
                 session = tf_debug.LocalCLIDebugWrapperSession(session)
                 session.add_tensor_filter("has_inf_or_nan", tf_debug.has_inf_or_nan)
-            session.run(tf.global_variables_initializer())
+            if restore_path is None:
+                session.run(tf.global_variables_initializer())
+            else:
+                self.saver.restore(session, restore_path)
             choose_where_to_print('Initialized')
             start_time = time.clock()
             average_percentage_of_correct = 0.
@@ -1082,7 +1080,13 @@ class MODEL(object):
                                 data_for_plot['validation']['perplexity'].append(validation_perplexity)
                     average_percentage_of_correct = 0.
                     average_summing_started = False
+                if save_steps is not None:
+                    if step in save_steps:
+                        current_save_path = save_path + str(step)
+                        self.create_path(current_save_path)
+                        self.saver.save(session, current_save_path)
                 step += 1
+                
             finish_time = time.clock()
             if save_path is not None:
                 self.save_graph(session, save_path)

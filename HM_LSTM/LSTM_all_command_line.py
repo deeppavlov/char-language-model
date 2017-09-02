@@ -42,8 +42,6 @@ class CommandLineInput(Exception):
     def __str__(self):
         return repr(self.value)
 
-#if len(sys.argv) < 2:
-    #raise CommandLineInput("2nd command line argument indicating dataset type is missing.\nUse either 'clean' or 'dirty'")
 if sys.argv[1] == 'dirty':
     if not os.path.exists('enwik8_filtered'):
         if not os.path.exists('enwik8'):
@@ -75,38 +73,39 @@ if sys.argv[1] == 'dirty':
         print("max order index: ", max_character_order_index)
         print("total number of characters: ", number_of_characters)
     
-        f = open('enwik8_filtered', 'wb')
-        f.write(text.encode('utf8'))
+        f = open('enwik8_filtered', 'w', encoding='utf-8')
+        f.write(text)
         f.close()
     
     else:
-
-        f = open('enwik8_filtered', 'rb')
-        text = f.read().decode('utf8')
+        f = open('enwik8_filtered', 'r', encoding='utf-8')
+        text = f.read()
         f.close() 
-        (not_one_byte_counter, min_character_order_index, max_character_order_index, number_of_characters, present_characters_indices) = check_not_one_byte(text)
+
 elif sys.argv[1] == 'clean':
     if not os.path.exists('enwik8_clean'):
         if not os.path.exists('enwik8'):
             filename = maybe_download('enwik8.zip', 36445475)
             full_text = read_data(filename)
-            f = open('enwik8', 'wb')
-            f.write(full_text.encode('utf8'))
+            f = open('enwik8_clean', 'w', encoding='utf-8')
+            f.write(full_text)
             f.close()       
         perl_script = subprocess.call(['perl', "clean.pl", 'enwik8', 'enwik8_clean'])
-    f = open('enwik8_clean', 'rb')
-    text = f.read().decode('utf8')
-    print(len(text))
+    f = open('enwik8_clean', 'r', encoding='utf-8')
+    text = f.read()
+    print('length of text:', len(text))
     f.close() 
     (not_one_byte_counter, min_character_order_index, max_character_order_index, number_of_characters, present_characters_indices) = check_not_one_byte(text)
 
 else:
-    raise CommandLineInput("2nd command line argument indicating dataset type is wrong.\nUse either 'clean' or 'dirty'")
+    f = open(sys.argv[1], 'r', encoding='utf-8')
+    text = f.read()
+    f.close() 
 
 
 #different
 offset = 20000
-valid_size = 500
+valid_size = 10000
 valid_text = text[offset:offset+valid_size]
 train_text = text[offset+valid_size:]
 train_size = len(train_text)
@@ -114,27 +113,10 @@ train_size = len(train_text)
 
 # In[5]:
 
-
-vocabulary_size = number_of_characters
-vocabulary = list()
-characters_positions_in_vocabulary = list()
-
-character_position_in_vocabulary = 0
-for i in range(256):
-    if present_characters_indices[i]:
-        if version >= 3:
-            vocabulary.append(chr(i))
-        else:
-            vocabulary.append(unichr(i))
-        characters_positions_in_vocabulary.append(character_position_in_vocabulary)
-        character_position_in_vocabulary += 1
-    else:
-        characters_positions_in_vocabulary.append(-1)
-
-print('vocabulary_size: ', vocabulary_size)
-string_vocabulary = u""
-for i in range(vocabulary_size):
-    string_vocabulary += vocabulary[i]
+vocabulary = create_vocabulary(text)
+vocabulary_size = len(vocabulary)
+characters_positions_in_vocabulary = get_positions_in_vocabulary(vocabulary)
+print(vocabulary)
 
 
 init_parameter_value = float(sys.argv[2])
