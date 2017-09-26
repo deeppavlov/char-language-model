@@ -1259,7 +1259,7 @@ class MODEL(object):
 
         
 
-    def plot_all(self, results_numbers, plot_validation=False, indent=0, save_folder=None, show=False):
+    def plot_all(self, results_numbers, title=None, dataset_type='train', plot_validation=False, indent=0, save_folder=None, show=False):
         # result_numbers is a list of numbers of runs to be plotted
         # indent is number of point from which the line is starting. It is convinient because first points can be definite outliers
         percentage_ylists = list()
@@ -1274,12 +1274,16 @@ class MODEL(object):
             BPC_ylists.append(self._results[result_num]["data"][Key]['BPC'][indent:])
             xlists.append(self._results[result_num]["data"][Key]['step'][indent:])
 
-        for result_number in results_numbers:
-            add_key_all(result_number, 'train')
-            if plot_validation: 
-                for key in self._results[result_number]["data"].keys():
-                    if key != 'train':
-                        add_key_all(result_number, key)
+        if dataset_type == 'train':
+            for result_number in results_numbers:
+                add_key_all(result_number, 'train')
+                if plot_validation: 
+                    for key in self._results[result_number]["data"].keys():
+                        if key != 'train':
+                            add_key_all(result_number, key)
+        else:
+            for result_number in results_numbers:
+                add_key_all(result_number, dataset_type)
              
         """if len(results_numbers) > 1:
             for result_number in results_numbers:
@@ -1296,11 +1300,11 @@ class MODEL(object):
                     if key != 'train':
                         add_key_all(result_number, key)"""
 
-        self.plot(xlists, percentage_ylists, labels, 'percentage', save_folder=save_folder, show=show)
-        self.plot(xlists, perplexity_ylists, labels, 'perplexity', save_folder=save_folder, show=show)
-        self.plot(xlists, BPC_ylists, labels, 'BPC', save_folder=save_folder, show=show)
+        self.plot(xlists, percentage_ylists, labels, 'percentage', title=title, save_folder=save_folder, show=show)
+        self.plot(xlists, perplexity_ylists, labels, 'perplexity', title=title, save_folder=save_folder, show=show)
+        self.plot(xlists, BPC_ylists, labels, 'BPC', title=title, save_folder=save_folder, show=show)
 
-    def plot_all_different(self, result_numbers, names, dataset, indent=0, save_folder=None, show=False):
+    def plot_all_different(self, result_numbers, names, dataset, title=None, indent=0, save_folder=None, show=False):
         # result_numbers is a list of numbers of runs to be plotted
         # indent is number of point from which the line is starting. It is convinient because first points can be definite outliers
         # 'names' is a list of model names
@@ -1318,9 +1322,9 @@ class MODEL(object):
             xlists.append(self._results[result_num]["data"][dataset]['step'][indent:])         
         for result_num, name in zip(result_numbers, names):
             add_name(result_num, name)
-        self.plot(xlists, percentage_ylists, labels, 'percentage', save_folder=save_folder, show=show)
-        self.plot(xlists, perplexity_ylists, labels, 'perplexity', save_folder=save_folder, show=show)
-        self.plot(xlists, BPC_ylists, labels, 'BPC', save_folder=save_folder, show=show)
+        self.plot(xlists, percentage_ylists, labels, 'percentage', title=title, save_folder=save_folder, show=show)
+        self.plot(xlists, perplexity_ylists, labels, 'perplexity', title=title, save_folder=save_folder, show=show)
+        self.plot(xlists, BPC_ylists, labels, 'BPC', title=title, save_folder=save_folder, show=show)
         
     def destroy(self):
         tf.reset_default_graph()
