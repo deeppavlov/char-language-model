@@ -188,8 +188,8 @@ class SimpleFontain(Model):
 
     def _layer(self,
                idx,
-                state,
-              bottom_up):
+               state,
+               bottom_up):
 
         with tf.name_scope('LSTM_layer_%s' % (idx)):
             # batch_size of processed data

@@ -554,6 +554,7 @@ class Handler(object):
                                 schedule,
                                 step,
                                 start_pointer):
+        #print('_get_additional_tensors method. schedule:', schedule)
         additional_tensors = list()
         pointer = start_pointer
         for tensors_use, tensors_schedule in schedule.items():
@@ -587,10 +588,10 @@ class Handler(object):
             self._last_run_tensor_order[tensors_use]['borders'] = [start, pointer]
         return additional_tensors
 
-    def _print_tensors(self, instructions, print_step=False):
-        print(instructions['message'])
+    def _print_tensors(self, instructions, print_step=False, indent=0):
         if print_step:
             print('step:', instructions['step'])
+        print('\n'* indent + instructions['message'])
         for alias, res in instructions['results'].items():
             if not isinstance(res, list):
                 print('%s:' % alias, res)
@@ -680,7 +681,7 @@ class Handler(object):
         instructions['message'] = 'train tensors:'
         instructions['results'] = dict()
         extracted_for_printing = self._extract_results(last_order, 'train_print_tensors', train_res)
-        print('extracted_for_printing:', extracted_for_printing)
+        #print('extracted_for_printing:', extracted_for_printing)
         instructions['results'].update(extracted_for_printing)
         return instructions
 
@@ -689,19 +690,11 @@ class Handler(object):
                                train_res):
         #print(self._last_run_tensor_order)
         basic_borders = self._last_run_tensor_order['basic']['borders']
-        tmp = train_res[basic_borders[0]:basic_borders[1]]
-        if len(tmp) == 3:
-            [loss, perplexity, accuracy] = tmp
-        else:
-            [loss, perplexity, accuracy, bpc] = tmp
-        print_borders = self._last_run_tensor_order['train_print_tensors']['borders']
-        if print_borders[1] - print_borders[0] > 0:
-            print_instructions = self._form_train_tensor_print_instructions(step,
-                                                                            train_res,
-                                                                            self._last_run_tensor_order)
-            self._print_tensors(print_instructions)
+        tmp = train_res[basic_borders[0]+1:basic_borders[1]]
+
         if step % (self._results_collect_interval * self._print_per_collected) == 0:
             if self._bpc:
+                [loss, perplexity, accuracy, bpc] = tmp
                 self._print_standard_report(indents=[2, 0],
                                             step=step,
                                             loss=loss,
@@ -710,12 +703,26 @@ class Handler(object):
                                             accuracy=accuracy,
                                             message='results on train dataset')
             else:
+                [loss, perplexity, accuracy] = tmp
                 self._print_standard_report(indents=[2, 0],
                                             step=step,
                                             loss=loss,
                                             perplexity=perplexity,
                                             accuracy=accuracy,
                                             message='results on train dataset')
+        print_borders = self._last_run_tensor_order['train_print_tensors']['borders']
+        if print_borders[1] - print_borders[0] > 0:
+            print_instructions = self._form_train_tensor_print_instructions(step,
+                                                                            train_res,
+                                                                            self._last_run_tensor_order)
+            other_stuff_is_printed = (step % (self._results_collect_interval * self._print_per_collected) == 0)
+            if other_stuff_is_printed:
+                indent = 0
+            else:
+                indent = 1
+            self._print_tensors(print_instructions,
+                                print_step=not other_stuff_is_printed,
+                                indent=indent)
         if step % self._results_collect_interval == 0:
             if self._bpc:
                 self._save_several_data(['loss', 'perplexity', 'accuracy', 'bpc'],
@@ -1089,6 +1096,7 @@ class Environment(object):
     def _add_hook(self, builder_name, model_type='pupil'):
         if builder_name in self._builders:
             builder = self._builders[builder_name]
+            #print(builder_name)
             kwargs = self._arguments_for_new_tensor_building(builder['hooks'],
                                                              builder['tensor_names'])
             kwargs['special_args'] = builder['special_args']
@@ -1127,8 +1135,8 @@ class Environment(object):
 
     def register_builder(self,
                          f=None,
-                         hooks=None,
-                         tensor_names=None,
+                         hooks=dict(),
+                         tensor_names=dict(),
                          output_hook_name=None,
                          special_args=None):
         if isinstance(f, str):
