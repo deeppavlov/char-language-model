@@ -172,8 +172,8 @@ class SimpleFontainBatcher(object):
 def flatten(nested):
     if not isinstance(nested, (tuple, list)):
         return [nested]
+    output = list()
     for inner_object in nested:
-        output = list()
         flattened = flatten(inner_object)
         output.extend(flattened)
     return output
@@ -277,7 +277,7 @@ class SimpleFontain(Model):
         return tf.einsum('ijk,ji->jk', for_computing, scores)
 
     def _output_module(self,
-                      hidden_states):
+                       hidden_states):
         # hidden_states is list of hidden_states by layer, concatenated along batch dimension
         with tf.name_scope('output_module'):
             concat = tf.concat(hidden_states, 1, name="total_concat_hidden")
@@ -319,27 +319,41 @@ class SimpleFontain(Model):
             logits = self._output_module(only_hidden)
         return [logits, state, tf.add(counter, 1, name='counter_%s' % iter_idx)]
 
+    @staticmethod
+    def _extract_op_name(full_name):
+        scopes_stripped = full_name.split('/')[-1]
+        return scopes_stripped.split(':')[0]
+
     def _compose_save_list(self,
                            *pairs):
-        save_list = list()
-        for pair in pairs:
-            variables = flatten(pair[0])
-            new_values = flatten(pair[1])
-            for variable, value in zip(variables, new_values):
-                save_list.append(tf.assign(variable, value))
-        return save_list
+        #print('start')
+        with tf.name_scope('save_list'):
+            save_list = list()
+            for pair in pairs:
+                #print('pair:', pair)
+                variables = flatten(pair[0])
+                print(variables)
+                new_values = flatten(pair[1])
+                for variable, value in zip(variables, new_values):
+                    name = self._extract_op_name(variable.name)
+                    save_list.append(tf.assign(variable, value, name='assign_save_%s' % name))
+            return save_list
 
     def _compose_reset_list(self, saved_last_sample_predictions, *args):
-        reset_list = list()
-        reset_list.append(tf.assign(saved_last_sample_predictions,
-                                    np.tile(char_2_base_vec(self._characters_positions_in_vocabulary,
-                                                            self._replica_delimiter),
-                                            (1, 1))))
-        flattened = flatten(args)
-        for variable in flattened:
-            shape = variable.get_shape().as_list()
-            reset_list.append(tf.assign(variable, tf.zeros(shape)))
-        return reset_list
+        with tf.name_scope('reset_list'):
+            reset_list = list()
+            name = self._extract_op_name(saved_last_sample_predictions.name)
+            reset_list.append(tf.assign(saved_last_sample_predictions,
+                                        np.tile(char_2_base_vec(self._characters_positions_in_vocabulary,
+                                                                self._replica_delimiter),
+                                                (1, 1)),
+                                        name='assign_reset_%s' % name))
+            flattened = flatten(args)
+            for variable in flattened:
+                shape = variable.get_shape().as_list()
+                name = self._extract_op_name(variable.name)
+                reset_list.append(tf.assign(variable, tf.zeros(shape), name='assign_reset_%s' % name))
+            return reset_list
 
     @staticmethod
     def _partial_zeroing_out(eod_flags,
@@ -534,7 +548,7 @@ class SimpleFontain(Model):
                 if iter_idx % self._attention_interval == 0:
                     for_attention.append(tf.concat([layer_state[0] for layer_state in state], 1))
                 list_of_logits.append(logits)
-                predictions = tf.nn.softmax(logits)
+                predictions = tf.nn.softmax(logits, name='predictions_%s' % iter_idx)
                 list_of_predictions.append(predictions)
 
             save_list = self._compose_save_list([saved_last_predictions, list_of_predictions[-1]],
@@ -559,7 +573,8 @@ class SimpleFontain(Model):
                 self.predictions = tf.nn.softmax(logits)
                 normal_loss = tf.reduce_sum(
                     tf.nn.softmax_cross_entropy_with_logits(
-                        labels=labels, logits=logits)) / (number_of_bot_characters + 1e-12)
+                        labels=labels, logits=logits, name='softmax_cross_entropy'),
+                    name='normal_loss') / (number_of_bot_characters + 1e-12)
                 self.loss = tf.cond(there_is_bot_answers,
                                     true_fn=lambda: normal_loss,
                                     false_fn=lambda: 0.)
