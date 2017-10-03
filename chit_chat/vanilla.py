@@ -21,26 +21,6 @@ from tensorflow.python import debug as tf_debug
 
 url = 'http://mattmahoney.net/dc/'
 
-colors = {0: 'k',
-          1: 'blue',
-          2: 'darkgoldenrod',
-          3: 'firebrick',
-          4: 'cyan',
-          5: 'gray',
-          6: 'm',
-          7: 'green',
-          8: 'yellow',
-          9: 'purple',
-          10: 'r',
-          11: '#E24A33',
-          12: '#92C6FF',
-          13: '#0072B2',
-          14: '#30a2da',
-          15: '#4C72B0',
-          16: '#8EBA42',
-          17: '#6d904f'}
-
-
 def maybe_download(filename, expected_bytes):
     # Download a file if not present, and make sure it's the right size.
     if not os.path.exists(filename):
@@ -149,7 +129,7 @@ def id2char(dictid, vocabulary):
 class BatchGenerator(object):
 
     @staticmethod
-    def create_vocabulary(self, texts):
+    def create_vocabulary(texts):
         text = ''
         for t in texts:
             text += t
@@ -244,6 +224,10 @@ class Vanilla(Model):
     def get_name(cls):
         return cls._name
 
+    @staticmethod
+    def get_special_args():
+        return dict()
+
     def _iter(self, inp, hidden_state):
         X = tf.concat([inp, hidden_state], 1)
         output = tf.tanh(tf.matmul(X, self._weights) + self._bias)
@@ -303,7 +287,6 @@ class Vanilla(Model):
         sample_logits = tf.matmul(sample_output, output_weights) + output_bias
         with tf.control_dependencies(sample_save_ops):
             self.sample_prediction = tf.nn.softmax(sample_logits)
-
         self.saver = tf.train.Saver(max_to_keep=None)
 
     def get_default_hooks(self):

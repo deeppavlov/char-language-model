@@ -41,7 +41,7 @@ def split_to_path_name(path):
 
 
 def create_path(path):
-    folder_list = path.split('/')[:-1]
+    folder_list = path.split('/')
     if len(folder_list) > 0:
         current_folder = folder_list[0]
         for idx, folder in enumerate(folder_list):
@@ -205,6 +205,8 @@ class Controller(object):
             self.get = self._periodic_truth
         elif self._specifications['type'] == 'true_on_steps':
             self.get = self._true_on_steps
+        elif self._specifications['type'] == 'always_false':
+            self.get = self._always_false
         elif self._specifications['type'] == 'changes_detector':
             self._value_controllers = list()
             self._last_values = list()
@@ -247,6 +249,9 @@ class Controller(object):
         else:
             return False
 
+    def _always_false(self):
+        return False
+
     @property
     def name(self):
         return self._specifications['name']
@@ -270,7 +275,7 @@ class Handler(object):
         self._result_types = self._environment_instance.put_result_types_in_correct_order(result_types)
         self._bpc = bpc
         self._hooks = hooks
-        self._last_run_tensor_order = None
+        self._last_run_tensor_order = dict()
         create_path(self._save_path)
         if self._processing_type == 'train':
             self._train_files = dict()
@@ -403,7 +408,13 @@ class Handler(object):
     def stop_accumulation(self):
         means = dict()
         for key, value_list in self._accumulated.items():
-            mean = sum(value_list) / len(value_list)
+            counter = 0
+            mean = 0
+            for value in value_list:
+                if value != -1.:
+                    mean += value
+                    counter += 1
+            mean = mean / counter
             file_d = self._dataset_specific[self._name_of_dataset_on_which_accumulating]['files'][key]
             if self._training_step is not None:
                 file_d.write('%s %s\n' % (self._training_step, mean))
@@ -413,9 +424,10 @@ class Handler(object):
         storage_keys = self._dataset_specific[self._name_of_dataset_on_which_accumulating]['storage_keys']
         self._environment_instance.append_to_storage(
             **dict([(storage_key, means[key]) for key, storage_key in storage_keys.items() if key != 'steps']))
-        self._print_all(regime='validation',
-                        message='results on validation dataset %s' % self._name_of_dataset_on_which_accumulating,
-                        **means)
+        self._print_standard_report(
+            regime='validation',
+            message='results on validation dataset %s' % self._name_of_dataset_on_which_accumulating,
+            **means)
         self._training_step = None
         self._name_of_dataset_on_which_accumulating = None
         self._save_accumulated_tensors()
@@ -504,19 +516,20 @@ class Handler(object):
         pointer = 0
         current = dict()
         self._last_run_tensor_order['basic'] = current
+        current['tensors'] = dict()
         start = pointer
         if regime == 'train':
             if with_assistant:
                 tensors.append(self._hooks['train_op_with_assistant'])
-                current['train_op_with_assistant'] = [pointer, pointer+1]
+                current['tensors']['train_op_with_assistant'] = [pointer, pointer+1]
                 pointer += 1
             else:
                 tensors.append(self._hooks['train_op'])
-                current['train_op'] = [pointer, pointer + 1]
+                current['tensors']['train_op'] = [pointer, pointer + 1]
                 pointer += 1
             for res_type in self._result_types:
                 tensors.append(self._hooks[res_type])
-                current[res_type] = [pointer, pointer + 1]
+                current['tensors'][res_type] = [pointer, pointer + 1]
                 pointer += 1
             self._last_run_tensor_order['basic']['borders'] = [start, pointer]
 
@@ -527,13 +540,14 @@ class Handler(object):
             tensors.append(self._hooks['validation_predictions'])
             for res_type in self._result_types:
                 tensors.append(self._hooks['validation_' + res_type])
-                current['validation_' + res_type] = [pointer, pointer + 1]
+                current['tensors']['validation_' + res_type] = [pointer, pointer + 1]
                 pointer += 1
             self._last_run_tensor_order['basic']['borders'] = [start, pointer]
 
             if self._validation_tensor_schedule is not None:
                 additional_tensors = self._get_additional_tensors(self._validation_tensor_schedule, step, pointer)
             tensors.extend(additional_tensors)
+        print(tensors)
         return tensors
 
     def _get_additional_tensors(self,
@@ -541,10 +555,11 @@ class Handler(object):
                                 step,
                                 start_pointer):
         additional_tensors = list()
-        self._last_run_tensor_order = dict()
         pointer = start_pointer
         for tensors_use, tensors_schedule in schedule.items():
+            #print('tensor_schedule:', tensors_schedule)
             self._last_run_tensor_order[tensors_use] = dict()
+            self._last_run_tensor_order[tensors_use]['tensors'] = dict()
             start = pointer
             if isinstance(tensors_schedule, dict):
                 for tensor_alias, tensor_schedule in tensors_schedule.items():
@@ -552,25 +567,43 @@ class Handler(object):
                         if step in tensor_schedule:
                             add_tensors, counter = self._cope_with_tensor_alias(tensor_alias)
                             additional_tensors.extend(add_tensors)
-                            self._last_run_tensor_order[tensors_use][tensor_alias] = [pointer, pointer + counter]
+                            self._last_run_tensor_order[tensors_use]['tensors'][tensor_alias] = [pointer,
+                                                                                                 pointer + counter]
                             pointer += counter
                     elif isinstance(tensor_schedule, int):
                         if step % tensor_schedule == 0:
                             add_tensors, counter = self._cope_with_tensor_alias(tensor_alias)
                             additional_tensors.extend(add_tensors)
-                            self._last_run_tensor_order[tensors_use][tensor_alias] = [pointer, pointer + counter]
+                            self._last_run_tensor_order[tensors_use]['tensors'][tensor_alias] = [pointer,
+                                                                                                 pointer + counter]
                             pointer += counter
             elif isinstance(tensors_schedule, list):
                 for tensor_alias in tensors_schedule:
                     add_tensors, counter = self._cope_with_tensor_alias(tensor_alias)
                     additional_tensors.extend(add_tensors)
-                    self._last_run_tensor_order[tensors_use][tensor_alias] = [pointer, pointer + counter]
+                    self._last_run_tensor_order[tensors_use]['tensors'][tensor_alias] = [pointer,
+                                                                                         pointer + counter]
                     pointer += counter
             self._last_run_tensor_order[tensors_use]['borders'] = [start, pointer]
         return additional_tensors
 
-    def _print_tensors(self, tensors, schedule):
-        pass
+    def _print_tensors(self, instructions, print_step=False):
+        print(instructions['message'])
+        if print_step:
+            print('step:', instructions['step'])
+        for alias, res in instructions['results'].items():
+            if not isinstance(res, list):
+                print('%s:' % alias, res)
+            else:
+                print('%s:' % alias)
+                if isinstance(res[0], list):
+                    for high_idx, high_elem in res.items():
+                        print('\n\n[%s]:' % high_idx)
+                        for low_idx, low_elem in high_elem.items():
+                            print('\n'*4 + '[%s][%s]:' % (high_idx, low_idx), low_elem)
+                else:
+                    for idx, elem in res.items():
+                        print('\n\n[%s]:' % idx, elem)
 
     def _accumulate_tensors(self, step, tensors):
         pass
@@ -592,10 +625,10 @@ class Handler(object):
                 if controller.name in self._printed_controllers:
                     print('%s:' % controller.name, controller.get())
 
-    def _print_all(self,
-                   indents=[0, 0],
-                   regime='train',
-                   **kwargs):
+    def _print_standard_report(self,
+                               indents=[0, 0],
+                               regime='train',
+                               **kwargs):
         for _ in range(indents[0]):
             print('')
         if regime == 'train':
@@ -612,39 +645,91 @@ class Handler(object):
         for _ in range(indents[1]):
             print('')
 
+    def _get_structure_of_hook(self, alias):
+        if not isinstance(self._hooks[alias], list):
+            return 1
+        else:
+            if not isinstance(self._hooks[alias][0], list):
+                return [len(self._hooks[alias])]
+            else:
+                output = [len(self._hooks[alias])]
+                for l in self._hooks[alias]:
+                    output.append(len(l))
+                return output
+
+    def _extract_results(self, last_order, tensor_use, train_res):
+        extracted = dict()
+        for alias, borders in last_order[tensor_use]['tensors'].items():
+            structure = self._get_structure_of_hook(alias)
+            if isinstance(structure, int):
+                extracted[alias] = train_res[borders[0]]
+            elif isinstance(structure, list):
+                if len(structure) == 1:
+                    extracted[alias] = train_res[borders[0], borders[1]]
+                else:
+                    structured = list()
+                    pointer = borders[0]
+                    for length in structure[1:]:
+                        structured.append(train_res[pointer, pointer+length])
+                    extracted[alias] = structured
+        return extracted
+
+    def _form_train_tensor_print_instructions(self, step, train_res, last_order):
+        instructions = dict()
+        instructions['step'] = step
+        instructions['message'] = 'train tensors:'
+        instructions['results'] = dict()
+        extracted_for_printing = self._extract_results(last_order, 'train_print_tensors', train_res)
+        print('extracted_for_printing:', extracted_for_printing)
+        instructions['results'].update(extracted_for_printing)
+        return instructions
+
     def _process_train_results(self,
                                step,
                                train_res):
-        [loss, perplexity, accuracy] = train_res[1:4]
-        if self._bpc:
-            bpc = train_res[4]
-            additional_tensors = train_res[5:]
+        #print(self._last_run_tensor_order)
+        basic_borders = self._last_run_tensor_order['basic']['borders']
+        tmp = train_res[basic_borders[0]:basic_borders[1]]
+        if len(tmp) == 3:
+            [loss, perplexity, accuracy] = tmp
         else:
-            additional_tensors = train_res[4:]
+            [loss, perplexity, accuracy, bpc] = tmp
+        print_borders = self._last_run_tensor_order['train_print_tensors']['borders']
+        if print_borders[1] - print_borders[0] > 0:
+            print_instructions = self._form_train_tensor_print_instructions(step,
+                                                                            train_res,
+                                                                            self._last_run_tensor_order)
+            self._print_tensors(print_instructions)
         if step % (self._results_collect_interval * self._print_per_collected) == 0:
             if self._bpc:
-                self._print_all(indents=[2, 0],
-                                step=step,
-                                loss=loss,
-                                bpc=bpc,
-                                perplexity=perplexity,
-                                accuracy=accuracy,
-                                tensors=additional_tensors,
-                                message='results on train dataset')
+                self._print_standard_report(indents=[2, 0],
+                                            step=step,
+                                            loss=loss,
+                                            bpc=bpc,
+                                            perplexity=perplexity,
+                                            accuracy=accuracy,
+                                            message='results on train dataset')
             else:
-                self._print_all(indents=[2, 0],
-                                step=step,
-                                loss=loss,
-                                perplexity=perplexity,
-                                accuracy=accuracy,
-                                tensors=additional_tensors,
-                                message='results on train dataset')
+                self._print_standard_report(indents=[2, 0],
+                                            step=step,
+                                            loss=loss,
+                                            perplexity=perplexity,
+                                            accuracy=accuracy,
+                                            message='results on train dataset')
         if step % self._results_collect_interval == 0:
-            self._save_several_data(['loss', 'perplexity', 'accuracy', 'bpc'], step, [loss, perplexity, accuracy, bpc])
-            self._environment_instance.append_to_storage(loss=loss,
-                                                         bpc=bpc,
-                                                         perplexity=perplexity,
-                                                         accuracy=accuracy)
+            if self._bpc:
+                self._save_several_data(['loss', 'perplexity', 'accuracy', 'bpc'],
+                                        step,
+                                        [loss, perplexity, accuracy, bpc])
+                self._environment_instance.append_to_storage(loss=loss,
+                                                             bpc=bpc,
+                                                             perplexity=perplexity,
+                                                             accuracy=accuracy)
+            else:
+                self._save_several_data(['loss', 'perplexity', 'accuracy'], step, [loss, perplexity, accuracy])
+                self._environment_instance.append_to_storage(loss=loss,
+                                                             perplexity=perplexity,
+                                                             accuracy=accuracy)
         self._save_tensors(train_res[3:])
 
     def process_results(self, step, res, regime):
@@ -660,6 +745,7 @@ class Handler(object):
             for file_d in dataset['files'].values():
                 file_d.close()
 
+
 class InvalidArgumentError(Exception):
     def __init__(self, msg, value, name, allowed_values):
         super(InvalidArgumentError, self).__init__(msg)
@@ -671,22 +757,53 @@ class InvalidArgumentError(Exception):
 
 def perplexity_tensor(**kwargs):
     probabilities = kwargs['probabilities']
+    labels = kwargs['labels']
+    special_args = kwargs['special_args']
+    if 'dialog_switch' in special_args:
+        if special_args['dialog_switch']:
+            probabilities_shape = probabilities.get_shape().as_list()
+            length = probabilities_shape[1]
+            _, switch = tf.split(labels, [length, 1], axis=1)
+    switch = tf.reshape(switch, [-1])
     ln2 = np.log(2)
     shape = probabilities.get_shape().as_list()
     probabilities = tf.where(probabilities > 1e-10, probabilities, np.full(tuple(shape), 1e-10))
     log_probabilities = tf.log(probabilities) / ln2
     entropy = tf.reduce_sum(- probabilities * log_probabilities, axis=1)
     perplexity = tf.exp(ln2 * entropy)
+    if 'dialog_switch' in special_args:
+        if special_args['dialog_switch']:
+            perplexity = perplexity * switch
+            num_of_sensible_results = tf.reduce_sum(switch)
+            there_is_sensible = tf.not_equal(num_of_sensible_results, 0.)
+            mean_perplexity = tf.divide(tf.reduce_sum(perplexity, name='sum_perplexity'),
+                                        (num_of_sensible_results + 1e-12),
+                                        name='mean_perplexity')
+            return tf.where(there_is_sensible, mean_perplexity, -1.)
     return tf.reduce_mean(perplexity, name="mean_perplexity")
 
 
 def loss_tensor(**kwargs):
     predictions = kwargs['predictions']
     labels = kwargs['labels']
+    special_args = kwargs['special_args']
+    if 'dialog_switch' in special_args:
+        if special_args['dialog_switch']:
+            predictions_shape = predictions.get_shape().as_list()
+            length = predictions_shape[1]
+            labels, switch = tf.split(labels, [length, 1], axis=1)
+    switch = tf.reshape(switch, [-1])
     shape = predictions.get_shape().as_list()
     predictions = tf.where(predictions > 1e-10, predictions, np.full(tuple(shape), 1e-10))
     log_predictions = tf.log(predictions)
-    loss_on_characters = tf.reduce_sum(-labels * log_predictions, axis=1)
+    loss_on_characters = tf.reduce_sum(-labels * log_predictions, axis=1) * switch
+    if 'dialog_switch' in special_args:
+        if special_args['dialog_switch']:
+            loss_on_characters = loss_on_characters * switch
+            num_of_sensible_results = tf.reduce_sum(switch)
+            there_is_sensible = tf.not_equal(num_of_sensible_results, 0.)
+            mean_loss = tf.reduce_sum(loss_on_characters, name='mean_perplexity') / (num_of_sensible_results + 1e-12)
+            return tf.where(there_is_sensible, mean_loss, -1.)
     return tf.reduce_mean(loss_on_characters)
 
 
@@ -697,9 +814,31 @@ def bpc_tensor(**kwargs):
 def accuracy_tensor(**kwargs):
     predictions = kwargs['predictions']
     labels = kwargs['labels']
+    special_args = kwargs['special_args']
+    if 'dialog_switch' in special_args:
+        if special_args['dialog_switch']:
+            predictions_shape = predictions.get_shape().as_list()
+            length = predictions_shape[1]
+            labels, switch = tf.split(labels, [length, 1], axis=1)
+    switch = tf.reshape(switch, [-1])
     predictions = tf.argmax(predictions, axis=1)
     labels = tf.argmax(labels, axis=1)
-    return tf.reduce_mean(tf.to_float(tf.equal(predictions, labels)))
+    accuracy = tf.to_float(tf.equal(predictions, labels))
+    if 'dialog_switch' in special_args:
+        if special_args['dialog_switch']:
+            accuracy = accuracy * switch
+            num_of_sensible_results = tf.reduce_sum(switch)
+            there_is_sensible = tf.not_equal(num_of_sensible_results, 0.)
+            mean_accuracy = tf.reduce_sum(accuracy, name='mean_perplexity') / (num_of_sensible_results + 1e-12)
+            return tf.where(there_is_sensible, mean_accuracy, -1.)
+    return tf.reduce_mean(accuracy)
+
+
+def identity_tensor(**kwargs):
+    if len(kwargs) > 1:
+        raise InvalidArgumentError('kwargs should not contain 1 entry', kwargs, 'kwargs', 'len(kwargs)=1')
+    for value in kwargs.values():
+        return value
 
 
 class Environment(object):
@@ -778,45 +917,57 @@ class Environment(object):
         # An attribute holding session. Default value when there is no active sessions is None
         self._session = None
 
-        train_perplexity_function = dict(f=perplexity_tensor,
-                                         hooks={'probabilities': 'predictions'},
-                                         tensor_names=dict(),
-                                         output_hook_name='perplexity')
-        valid_perplexity_function = dict(f=perplexity_tensor,
-                                         hooks={'probabilities': 'validation_predictions'},
-                                         tensor_names=dict(),
-                                         output_hook_name='validation_perplexity')
-        valid_loss_function = dict(f=loss_tensor,
-                                   hooks={'predictions': 'validation_predictions',
-                                          'labels': 'validation_labels'},
-                                   tensor_names=dict(),
-                                   output_hook_name='validation_loss')
-        train_bpc_function = dict(f=bpc_tensor,
-                                  hooks={'loss': 'loss'},
-                                  tensor_names=dict(),
-                                  output_hook_name='bpc')
-        valid_bpc_function=dict(f=bpc_tensor,
-                                hooks={'loss': 'validation_loss'},
-                                tensor_names=dict(),
-                                output_hook_name='validation_bpc')
-        train_accuracy_function=dict(f=accuracy_tensor,
-                                     hooks={'predictions': 'predictions',
-                                            'labels': 'labels'},
-                                     tensor_names=dict(),
-                                     output_hook_name='accuracy')
-        valid_accuracy_function=dict(f=accuracy_tensor,
-                                     hooks={'predictions': 'validation_predictions',
-                                            'labels': 'validation_labels'},
-                                     tensor_names=dict(),
-                                     output_hook_name='validation_accuracy')
+        self._build_functions = {'identity': identity_tensor}
 
-        self._tensor_build_functions = {'perplexity': train_perplexity_function,
-                                        'validation_perplexity': valid_perplexity_function,
-                                        'validation_loss': valid_loss_function,
-                                        'bpc': train_bpc_function,
-                                        'validation_bpc': valid_bpc_function,
-                                        'accuracy': train_accuracy_function,
-                                        'validation_accuracy': valid_accuracy_function}
+        pupil_special_args = self._pupil_class.get_special_args()
+        train_perplexity_builder = dict(f=perplexity_tensor,
+                                        hooks={'probabilities': 'predictions',
+                                               'labels': 'labels'},
+                                        tensor_names=dict(),
+                                        output_hook_name='perplexity',
+                                        special_args=pupil_special_args)
+        valid_perplexity_builder = dict(f=perplexity_tensor,
+                                        hooks={'probabilities': 'validation_predictions',
+                                               'labels': 'validation_labels'},
+                                        tensor_names=dict(),
+                                        output_hook_name='validation_perplexity',
+                                        special_args=pupil_special_args)
+        valid_loss_builder = dict(f=loss_tensor,
+                                  hooks={'predictions': 'validation_predictions',
+                                         'labels': 'validation_labels'},
+                                  tensor_names=dict(),
+                                  output_hook_name='validation_loss',
+                                  special_args=pupil_special_args)
+        train_bpc_builder = dict(f=bpc_tensor,
+                                 hooks={'loss': 'loss'},
+                                 tensor_names=dict(),
+                                 output_hook_name='bpc',
+                                 special_args=pupil_special_args)
+        valid_bpc_builder=dict(f=bpc_tensor,
+                               hooks={'loss': 'validation_loss'},
+                               tensor_names=dict(),
+                               output_hook_name='validation_bpc',
+                               special_args=pupil_special_args)
+        train_accuracy_builder=dict(f=accuracy_tensor,
+                                    hooks={'predictions': 'predictions',
+                                          'labels': 'labels'},
+                                    tensor_names=dict(),
+                                    output_hook_name='accuracy',
+                                    special_args=pupil_special_args)
+        valid_accuracy_builder=dict(f=accuracy_tensor,
+                                    hooks={'predictions': 'validation_predictions',
+                                           'labels': 'validation_labels'},
+                                    tensor_names=dict(),
+                                    output_hook_name='validation_accuracy',
+                                    special_args=pupil_special_args)
+
+        self._builders = {'perplexity': train_perplexity_builder,
+                          'validation_perplexity': valid_perplexity_builder,
+                          'validation_loss': valid_loss_builder,
+                          'bpc': train_bpc_builder,
+                          'validation_bpc': valid_bpc_builder,
+                          'accuracy': train_accuracy_builder,
+                          'validation_accuracy': valid_accuracy_builder}
 
         tensor_schedule = {'train_print_tensors': dict(),
                            'train_save_tensors': dict(),
@@ -857,7 +1008,7 @@ class Environment(object):
                          'restore_path': None,
                          'save_path': None,
                          'result_types': self.put_result_types_in_correct_order(
-                             ['loss', 'perplexity', 'accuracy', 'bpc']),
+                             ['loss', 'perplexity', 'accuracy']),
                          'summary': False,
                          'add_graph_to_summary': False,
                          'batch_generator_class': default_batch_generator},
@@ -873,7 +1024,8 @@ class Environment(object):
                              'debug': None,
                              'validation_datasets': None,
                              'validation_batch_size': 1,
-                             'valid_batch_kwargs': dict()},
+                             'valid_batch_kwargs': dict(),
+                             'no_validation': False},
                 schedule={'to_be_collected_while_training': construct(default_collected_while_training),
                           'printed_result_types':  self.put_result_types_in_correct_order(
                              ['loss']),
@@ -931,19 +1083,20 @@ class Environment(object):
                 self._pupil_hooks[value] = tf.placeholder(tf.float32)
             arguments[key] = self._pupil_hooks[value]
         for key, value in tensor_names.items():
-            arguments[key] = tf.get_tensor_by_name(value)
+            arguments[key] = tf.get_default_graph().get_tensor_by_name(value)
         return arguments
 
     def _add_hook(self, builder_name, model_type='pupil'):
-        if builder_name in self._tensor_build_functions:
-            build_instructions = self._tensor_build_functions[builder_name]
-            kwargs = self._arguments_for_new_tensor_building(build_instructions['hooks'],
-                                                             build_instructions['tensor_names'])
-            new_tensor = build_instructions['f'](**kwargs)
+        if builder_name in self._builders:
+            builder = self._builders[builder_name]
+            kwargs = self._arguments_for_new_tensor_building(builder['hooks'],
+                                                             builder['tensor_names'])
+            kwargs['special_args'] = builder['special_args']
+            new_tensor = builder['f'](**kwargs)
             if model_type == 'pupil':
-                self._pupil_hooks[build_instructions['output_hook_name']] = new_tensor
+                self._pupil_hooks[builder['output_hook_name']] = new_tensor
             else:
-                self._assistant_hooks[build_instructions['output_hook_name']] = new_tensor
+                self._assistant_hooks[builder['output_hook_name']] = new_tensor
         else:
             stars = '\n**********\n'
             msg = "Warning! Adding to hooks shapeless placeholder of type tf.float32 with alias '%s'" % builder_name
@@ -953,12 +1106,38 @@ class Environment(object):
             else:
                 self._assistant_hooks[builder_name] = tf.placeholder(tf.float32)
 
-    def _add_several_hooks(self, builder_names, model_type='pupil'):
-        loss_names, not_loss_names = self._split_to_loss_and_not_loss_names(builder_names)
-        for loss_name in loss_names:
-            self._add_hook(loss_name, model_type=model_type)
-        for not_loss_name in not_loss_names:
-            self._add_hook(not_loss_name, model_type=model_type)
+    def add_hooks(self, builder_names_or_builders=[], tensor_names=[], model_type='pupil'):
+        actual_names = list()
+        for builder_name in builder_names_or_builders:
+            if isinstance(builder_name, dict):
+                self.register_builder(**builder_name)
+                actual_names.append(builder_name['output_hook_name'])
+            else:
+                actual_names.append(builder_name)
+        loss_builder_names, not_loss_builder_names = self._split_to_loss_and_not_loss_names(actual_names)
+        for builder_name in loss_builder_names:
+            self._add_hook(builder_name, model_type=model_type)
+        for builder_name in not_loss_builder_names:
+            self._add_hook(builder_name, model_type=model_type)
+        for alias, name in tensor_names:
+            self._hooks[alias] = tf.get_default_graph().get_tensor_by_name(name)
+
+    def register_build_function(self, function, name):
+        self._build_functions[name] = function
+
+    def register_builder(self,
+                         f=None,
+                         hooks=None,
+                         tensor_names=None,
+                         output_hook_name=None,
+                         special_args=None):
+        if isinstance(f, str):
+            f = self._build_functions[f]
+        self._builders[output_hook_name] = dict(f=f,
+                                                hooks=hooks,
+                                                tensor_names=tensor_names,
+                                                output_hook_name=output_hook_name,
+                                                special_args=special_args)
 
     @classmethod
     def _update_dict(cls, dict_to_update, update):
@@ -1111,7 +1290,7 @@ class Environment(object):
             list_of_required_tensors_aliases.extend(valid_aliases)
         return list_of_required_tensors_aliases
 
-    def _create_all_missing_hooks(self, list_of_tensor_aliases, model_type='pupil'):
+    def _create_missing_hooks(self, list_of_tensor_aliases, model_type='pupil'):
         missing = list()
         for tensor_alias in list_of_tensor_aliases:
             if model_type == 'pupil':
@@ -1120,7 +1299,7 @@ class Environment(object):
             if model_type == 'assistant':
                 if tensor_alias not in self._assistant_hooks:
                     missing.append(tensor_alias)
-        self._add_several_hooks(missing, model_type=model_type)
+        self.add_hooks(missing, model_type=model_type)
 
     def _build_batch_kwargs(self, unprepaired_kwargs):
         kwargs = dict()
@@ -1140,7 +1319,6 @@ class Environment(object):
         from train method (maybe several times)
         Args:
             kwargs should include all entries defined in self._pupil_default_training"""
-        #print("_train method 'run_specs':\n", run_specs)
         train_specs = construct(run_specs['train_specs'])
         schedule = construct(run_specs['schedule'])
         step = init_step
@@ -1168,9 +1346,13 @@ class Environment(object):
         print_per_collected = to_be_collected_while_training['print_per_collected']
 
         valid_period = collect_interval * print_per_collected
-        it_is_time_for_validation = Controller(self._storage,
-                                               {'type': 'periodic_truth',
-                                                'period': valid_period})
+        if train_specs['no_validation']:
+            it_is_time_for_validation = Controller(self._storage,
+                                                   {'type': 'always_false'})
+        else:
+            it_is_time_for_validation = Controller(self._storage,
+                                                   {'type': 'periodic_truth',
+                                                    'period': valid_period})
 
         if train_specs['checkpoint_steps'] is not None:
             if train_specs['checkpoint_steps']['type'] == 'true_on_steps':
@@ -1220,7 +1402,6 @@ class Environment(object):
         self._handler.set_new_run_schedule(schedule,
                                            train_specs['train_dataset'][1],
                                            [dataset[1] for dataset in train_specs['validation_datasets']])
-        print(controllers_for_printing)
         self._handler.set_controllers(controllers_for_printing)
 
         batch_size = batch_size_controller.get()
@@ -1314,7 +1495,7 @@ class Environment(object):
                 self._set_controller_name_in_specs(set_of_kwargs[key], 'learning_rate')
             if key == 'debug':
                 if isinstance(value, int):
-                    set_of_kwargs[key] = {'type': 'true_on_steps', 'step': [value]}
+                    set_of_kwargs[key] = {'type': 'true_on_steps', 'steps': [value]}
                 else:
                     set_of_kwargs[key] = None
                 self._set_controller_name_in_specs(set_of_kwargs[key], 'debug')
@@ -1334,7 +1515,6 @@ class Environment(object):
                 set_of_kwargs['summary'] = False
         self._process_datasets_shortcuts(set_of_kwargs)
         self._process_batch_kwargs_shortcuts(set_of_kwargs)
-        #print(set_of_kwargs)
 
     def _process_batch_kwargs_shortcuts(self, set_of_kwargs):
         if 'train_batch_kwargs' not in set_of_kwargs:
@@ -1496,6 +1676,7 @@ class Environment(object):
 
         #print('\n\n_parse_train_method_arguments method\ntrain_args:', train_args, '\ntrain_kwargs:', train_kwargs)
         if len(train_args) == 0:
+            #print('train_kwargs:', train_kwargs)
             parsed_arguments = self._parse_list_of_sets_of_kwargs([train_kwargs],
                                                                   'train',
                                                                   'run')
@@ -1605,7 +1786,7 @@ class Environment(object):
         run_specs_set = tmp_output['run']
         batch_generator_class = start_specs['batch_generator_class']
         all_tensor_aliases = self._all_tensor_aliases_from_train_arguments(start_specs, run_specs_set)
-        self._create_all_missing_hooks(all_tensor_aliases)
+        self._create_missing_hooks(all_tensor_aliases)
 
         if start_session:
             self._start_session(start_specs['allow_soft_placement'],
