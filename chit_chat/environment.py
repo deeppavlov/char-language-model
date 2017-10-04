@@ -547,7 +547,7 @@ class Handler(object):
             if self._validation_tensor_schedule is not None:
                 additional_tensors = self._get_additional_tensors(self._validation_tensor_schedule, step, pointer)
             tensors.extend(additional_tensors)
-        print(tensors)
+        #print(tensors)
         return tensors
 
     def _get_additional_tensors(self,
@@ -590,8 +590,8 @@ class Handler(object):
 
     def _print_tensors(self, instructions, print_step=False, indent=0):
         if print_step:
-            print('step:', instructions['step'])
-        print('\n'* indent + instructions['message'])
+            print('\n'*indent + 'step:', instructions['step'])
+        print(instructions['message'])
         for alias, res in instructions['results'].items():
             if not isinstance(res, list):
                 print('%s:' % alias, res)
@@ -1096,7 +1096,7 @@ class Environment(object):
     def _add_hook(self, builder_name, model_type='pupil'):
         if builder_name in self._builders:
             builder = self._builders[builder_name]
-            #print(builder_name)
+            print(builder_name)
             kwargs = self._arguments_for_new_tensor_building(builder['hooks'],
                                                              builder['tensor_names'])
             kwargs['special_args'] = builder['special_args']
@@ -1110,9 +1110,9 @@ class Environment(object):
             msg = "Warning! Adding to hooks shapeless placeholder of type tf.float32 with alias '%s'" % builder_name
             print(stars + msg + stars)
             if model_type == 'pupil':
-                self._pupil_hooks[builder_name] = tf.placeholder(tf.float32)
+                self._pupil_hooks[builder_name] = tf.placeholder(tf.float32, name=builder_name)
             else:
-                self._assistant_hooks[builder_name] = tf.placeholder(tf.float32)
+                self._assistant_hooks[builder_name] = tf.placeholder(tf.float32, name=builder_name)
 
     def add_hooks(self, builder_names_or_builders=[], tensor_names=[], model_type='pupil'):
         actual_names = list()
@@ -1132,6 +1132,10 @@ class Environment(object):
 
     def register_build_function(self, function, name):
         self._build_functions[name] = function
+
+    def print_available_builders(self):
+        for builder_name, builder in self._builders.items():
+            print(builder_name + ':', builder)
 
     def register_builder(self,
                          f=None,

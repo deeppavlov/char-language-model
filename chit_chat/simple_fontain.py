@@ -261,9 +261,10 @@ class SimpleFontain(Model):
                                  bot_answer_flag=1,
                                  eod=False)
         [delimiter_vec, _] = np.split(delimiter_vec, [self._vocabulary_size + self._flag_size], axis=1)
-        input_is_not_delimiter = tf.not_equal(tf.reduce_sum(inp*delimiter_vec, axis=1), 1.)
-        bot_answer_flags = tf.cast(tf.reshape(bot_answer_flags, [-1]), tf.bool)
-        return tf.where(tf.logical_and(bot_answer_flags, input_is_not_delimiter), answer, inp)
+        input_is_not_delimiter = tf.not_equal(tf.reduce_sum(inp*delimiter_vec, axis=1, keep_dims=True), 1.)
+        bot_answer_flags = tf.cast(bot_answer_flags, tf.bool)
+        mask = tf.to_float(tf.logical_and(bot_answer_flags, input_is_not_delimiter))
+        return mask * answer + (1. - mask) * inp
 
     def _embed(self, inp):
         return tf.matmul(inp, self._embedding_matrix) + self._embedding_bias
@@ -332,7 +333,7 @@ class SimpleFontain(Model):
             for pair in pairs:
                 #print('pair:', pair)
                 variables = flatten(pair[0])
-                print(variables)
+                #print(variables)
                 new_values = flatten(pair[1])
                 for variable, value in zip(variables, new_values):
                     name = self._extract_op_name(variable.name)
@@ -358,9 +359,7 @@ class SimpleFontain(Model):
     @staticmethod
     def _partial_zeroing_out(eod_flags,
                              tensor):
-        shape = tensor.get_shape().as_list()
-        eod_flags = tf.cast(tf.reshape(eod_flags, [-1]), tf.bool)
-        return tf.where(eod_flags, tf.zeros(shape), tensor)
+        return (1. - eod_flags) * tensor
 
     def _zeroing_out_after_end_of_dialog(self,
                                          eod_flags,
@@ -516,8 +515,8 @@ class SimpleFontain(Model):
             inputs = tf.unstack(inputs)
             eod_flags = tf.unstack(eod_flags)
             [labels, _] = tf.split(self.labels, [self._vocabulary_size, 1], axis=1)
-            bot_answer_flags = tf.reshape(bot_answer_flags, [self._batch_size * self._num_unrollings, 1])
             bot_answer_flags_splitted = tf.unstack(bot_answer_flags)
+            bot_answer_flags = tf.reshape(bot_answer_flags, [self._batch_size * self._num_unrollings])
 
             self.learning_rate = tf.placeholder(tf.float32, name='learning_rate')
 
@@ -555,14 +554,9 @@ class SimpleFontain(Model):
                                                 [saved_state, state],
                                                 [saved_for_attention, for_attention])
             logits = tf.concat(list_of_logits, 0, name='all_logits')
-            shape = labels.get_shape().as_list()
+            logits = tf.reshape(bot_answer_flags, [self._batch_size * self._num_unrollings, 1]) * logits
             number_of_bot_characters = tf.reduce_sum(bot_answer_flags)
             there_is_bot_answers = tf.not_equal(number_of_bot_characters, 0.)
-            labels = tf.where(tf.cast(tf.reshape(bot_answer_flags,
-                                                 [-1]),
-                                      tf.bool),
-                              labels,
-                              tf.zeros(shape))
             regularizer = tf.contrib.layers.l2_regularizer(.5)
 
             l2_loss = regularizer(self._output_embedding_matrix)
@@ -571,10 +565,13 @@ class SimpleFontain(Model):
 
             with tf.control_dependencies(save_list):
                 self.predictions = tf.nn.softmax(logits)
-                normal_loss = tf.reduce_sum(
-                    tf.nn.softmax_cross_entropy_with_logits(
-                        labels=labels, logits=logits, name='softmax_cross_entropy'),
-                    name='normal_loss') / (number_of_bot_characters + 1e-12)
+                ce = tf.nn.softmax_cross_entropy_with_logits(
+                        labels=labels, logits=logits, name='softmax_cross_entropy')
+                normal_loss = tf.reduce_sum(ce * bot_answer_flags) / (number_of_bot_characters + 1e-12)
+                # normal_loss = tf.reduce_mean(
+                #     tf.nn.softmax_cross_entropy_with_logits(
+                #         labels=labels, logits=logits, name='softmax_cross_entropy'),
+                #     name='normal_loss')
                 self.loss = tf.cond(there_is_bot_answers,
                                     true_fn=lambda: normal_loss,
                                     false_fn=lambda: 0.)
