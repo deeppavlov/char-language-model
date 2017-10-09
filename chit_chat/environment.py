@@ -1,9 +1,10 @@
 import os
 import pickle
 import numpy as np
+import multiprocessing as mp
 import tensorflow as tf
-import inspect
 from tensorflow.python import debug as tf_debug
+from some_useful_functions import construct
 
 
 def compute_perplexity(probabilities):
@@ -90,30 +91,6 @@ def match_two_dicts(small_dict, big_dict):
     return True
 
 
-def construct(obj):
-    """Used for preventing of not expected changing of class attributes"""
-    if isinstance(obj, dict):
-        new_obj = dict()
-        for key, value in obj.items():
-            new_obj[key] = construct(value)
-    elif isinstance(obj, list):
-        new_obj = list()
-        for value in obj:
-            new_obj.append(construct(value))
-    elif isinstance(obj, tuple):
-        base = list()
-        for value in obj:
-            base.append(construct(value))
-        new_obj = tuple(base)
-    elif isinstance(obj, str):
-        new_obj = str(obj)
-    elif isinstance(obj, (int, float, complex, type(None))) or inspect.isclass(obj):
-        new_obj = obj
-    else:
-        raise TypeError("Object of unsupported type was passed to construct function: %s" % type(obj))
-    return new_obj
-
-
 def split_dictionary(dict_to_split, bases):
     """Function takes dictionary dict_to_split and splits it into several dictionaries according to keys of dicts
     from bases"""
@@ -165,6 +142,13 @@ def search_in_nested_dictionary(dictionary, searched_key):
                 if returned_value is not None:
                     return returned_value
     return None
+
+
+def add_missing_to_list(extended_list, added_list):
+    for elem in added_list:
+        if elem not in extended_list:
+            extended_list.append(elem)
+    return extended_list
 
 
 class Controller(object):
@@ -266,51 +250,55 @@ class Handler(object):
                  save_path,
                  result_types,
                  summary=False,
-                 bpc=False,
-                 add_graph_to_summary=False):
+                 add_graph_to_summary=False,
+                 eval_dataset_names=None,
+                 hyperparameters=None):
         continuous_chit_chat = ['simple_fontain']
         self._processing_type = processing_type
         self._environment_instance = environment_instance
         self._save_path = save_path
         self._result_types = self._environment_instance.put_result_types_in_correct_order(result_types)
-        self._bpc = bpc
+        self._bpc = 'bpc' in self._result_types
         self._hooks = hooks
         self._last_run_tensor_order = dict()
-        create_path(self._save_path)
+        if self._save_path is not None:
+            create_path(self._save_path)
         if self._processing_type == 'train':
+            self.process_results = self._fork_process_results
             self._train_files = dict()
-            self._train_files['loss'] = open(self._save_path +
-                                             '/' +
-                                             'loss_train.txt',
-                                             'a')
-            self._train_files['perplexity'] = open(self._save_path +
-                                                   '/' +
-                                                   'perplexity_train.txt',
-                                                   'a')
-            self._train_files['accuracy'] = open(self._save_path +
+            if self._save_path is not None:
+                self._train_files['loss'] = open(self._save_path +
                                                  '/' +
-                                                 'accuracy_train.txt',
+                                                 'loss_train.txt',
                                                  'a')
-            if self._bpc:
-                self._train_files['bpc'] = open(self._save_path +
-                                                '/' +
-                                                'bpc_train.txt',
-                                                'a')
-            self._train_files['pickle_tensors'] = open(self._save_path +
+                self._train_files['perplexity'] = open(self._save_path +
                                                        '/' +
-                                                       'tensors_train.pickle',
-                                                       'ab')
+                                                       'perplexity_train.txt',
+                                                       'a')
+                self._train_files['accuracy'] = open(self._save_path +
+                                                     '/' +
+                                                     'accuracy_train.txt',
+                                                     'a')
+                if self._bpc:
+                    self._train_files['bpc'] = open(self._save_path +
+                                                    '/' +
+                                                    'bpc_train.txt',
+                                                    'a')
+                self._train_files['pickle_tensors'] = open(self._save_path +
+                                                           '/' +
+                                                           'tensors_train.pickle',
+                                                           'ab')
             self._train_dataset_name = None
             self._dataset_specific = dict()
             self._controllers = None
-            self._results_collect_interval=None
-            self._print_per_collected=None
-            self._example_per_print=None
-            self._train_tensor_schedule=None
-            self._validation_tensor_schedule=None
-            self._printed_result_types=None
-            self._printed_controllers=None
-            if summary:
+            self._results_collect_interval = None
+            self._print_per_collected = None
+            self._example_per_print = None
+            self._train_tensor_schedule = None
+            self._validation_tensor_schedule = None
+            self._printed_result_types = None
+            self._printed_controllers = None
+            if summary and self._save_path is not None:
                 self._writer = tf.summary.FileWriter(self._save_path + '/' + 'summary')
                 if add_graph_to_summary:
                     self._writer.add_graph(tf.get_default_graph())
@@ -326,65 +314,85 @@ class Handler(object):
             if self._bpc:
                 self._accumulated['bpc'] = None
         if self._processing_type == 'test':
-            self.process_results = self._process_validation_results
-            self._training_step = None
+            self.process_results = self._fork_process_results
             self._name_of_dataset_on_which_accumulating = None
+            self._dataset_specific = dict()
+            self._validation_tensor_schedule = None
             self._accumulated_tensors = dict()
             self._accumulated = dict(loss=None, perplexity=None, accuracy=None)
             if self._bpc:
                 self._accumulated['bpc'] = None
+        if self._processing_type == 'several_launches':
+            self.process_results = self._several_launches_results_processing
+            self._result_types = result_types
+            self._eval_dataset_names = eval_dataset_names
+            self._save_path = save_path
+            self._environment_instance = environment_instance
+            self._hyperparameters = hyperparameters
+            self._order = list(self._result_types)
+            if self._hyperparameters is not None:
+                self._order.extend(self._hyperparameters)
+            create_path(self._save_path)
+            self._file_descriptors = dict()
+            self._tmpl = '%s '*(len(self._order) - 1) + '%s\n'
+            for dataset_name in eval_dataset_names:
+                self._file_descriptors[dataset_name] = open(self._save_path + '/' + dataset_name + '.txt',
+                                                            'a')
+                self._file_descriptors[dataset_name].write(self._tmpl % tuple(self._order))
+            self._environment_instance.init_storage(launches=list())
 
         # The order in which tensors are presented in the list returned by get_additional_tensors method
         # It is a list. Each element is either tensor alias or a tuple if corresponding hook is pointing to a list of
         # tensors. Such tuple contains tensor alias, and sizes of nested lists
 
-
-    def _switch_datasets(self, train_dataset_name, validation_dataset_names):
-        self._train_dataset_name = train_dataset_name
-        for dataset_name in validation_dataset_names:
-            if dataset_name not in self._dataset_specific.keys():
-                new_files = dict()
-                new_files['loss'] = open(self._save_path +
-                                         '/' +
-                                         'loss_validation_%s.txt' % dataset_name,
-                                         'a')
-                new_files['perplexity'] = open(self._save_path +
-                                               '/' +
-                                               'perplexity_validation_%s.txt' % dataset_name,
-                                               'a')
-                new_files['accuracy'] = open(self._save_path +
+    def _switch_datasets(self, train_dataset_name=None, validation_dataset_names=None):
+        if train_dataset_name is not None:
+            self._train_dataset_name = train_dataset_name
+        if validation_dataset_names is not None:
+            for dataset_name in validation_dataset_names:
+                if dataset_name not in self._dataset_specific.keys():
+                    new_files = dict()
+                    new_files['loss'] = open(self._save_path +
                                              '/' +
-                                             'accuracy_validation_%s.txt' % dataset_name,
+                                             'loss_validation_%s.txt' % dataset_name,
                                              'a')
-                if self._bpc:
-                    new_files['bpc'] = open(self._save_path +
-                                            '/' +
-                                            'bpc_validation_%s.txt' % dataset_name,
-                                            'a')
-                new_files['pickle_tensors'] = open(self._save_path +
+                    new_files['perplexity'] = open(self._save_path +
                                                    '/' +
-                                                   'tensors_validation_%s.pickle' % dataset_name,
-                                                   'ab')
-                new_storage_keys = dict()
-                new_storage_keys['steps'] = 'valid_%s_steps' % dataset_name
-                new_storage_keys['loss'] = 'valid_%s_loss' % dataset_name
-                new_storage_keys['perplexity'] = 'valid_%s_perplexity' % dataset_name
-                new_storage_keys['accuracy'] = 'valid_%s_accuracy' % dataset_name
-                if self._bpc:
-                    new_storage_keys['bpc'] = 'valid_%s_bpc' % dataset_name
-                self._dataset_specific[dataset_name] = {'name': dataset_name,
-                                                        'files': new_files,
-                                                        'storage_keys': new_storage_keys}
-                init_dict = dict()
-                for storage_key in new_storage_keys.values():
-                    if not self._environment_instance.check_if_key_in_storage(storage_key):
-                        init_dict[storage_key] = list()
-                self._environment_instance.init_storage(**init_dict)
-        for key in self._dataset_specific.keys():
-            if key not in validation_dataset_names:
-                for file_d in self._dataset_specific[key]['files'].values():
-                    file_d.close()
-                del self._dataset_specific[key]
+                                                   'perplexity_validation_%s.txt' % dataset_name,
+                                                   'a')
+                    new_files['accuracy'] = open(self._save_path +
+                                                 '/' +
+                                                 'accuracy_validation_%s.txt' % dataset_name,
+                                                 'a')
+                    if self._bpc:
+                        new_files['bpc'] = open(self._save_path +
+                                                '/' +
+                                                'bpc_validation_%s.txt' % dataset_name,
+                                                'a')
+                    new_files['pickle_tensors'] = open(self._save_path +
+                                                       '/' +
+                                                       'tensors_validation_%s.pickle' % dataset_name,
+                                                       'ab')
+                    new_storage_keys = dict()
+                    new_storage_keys['steps'] = 'valid_%s_steps' % dataset_name
+                    new_storage_keys['loss'] = 'valid_%s_loss' % dataset_name
+                    new_storage_keys['perplexity'] = 'valid_%s_perplexity' % dataset_name
+                    new_storage_keys['accuracy'] = 'valid_%s_accuracy' % dataset_name
+                    if self._bpc:
+                        new_storage_keys['bpc'] = 'valid_%s_bpc' % dataset_name
+                    self._dataset_specific[dataset_name] = {'name': dataset_name,
+                                                            'files': new_files,
+                                                            'storage_keys': new_storage_keys}
+                    init_dict = dict()
+                    for storage_key in new_storage_keys.values():
+                        if not self._environment_instance.check_if_key_in_storage(storage_key):
+                            init_dict[storage_key] = list()
+                    self._environment_instance.init_storage(**init_dict)
+            for key in self._dataset_specific.keys():
+                if key not in validation_dataset_names:
+                    for file_d in self._dataset_specific[key]['files'].values():
+                        file_d.close()
+                    del self._dataset_specific[key]
 
     def set_new_run_schedule(self, schedule, train_dataset_name, validation_dataset_names):
         self._results_collect_interval = schedule['to_be_collected_while_training']['results_collect_interval']
@@ -396,6 +404,10 @@ class Handler(object):
         self._printed_result_types = schedule['printed_result_types']
         self._switch_datasets(train_dataset_name, validation_dataset_names)
 
+    def set_test_specs(self, validation_dataset_names=None, fuses=None, replicas=None, random=None):
+        if validation_dataset_names is not None:
+            self._switch_datasets(validation_dataset_names=validation_dataset_names)
+
     def set_controllers(self, controllers):
         self._controllers = controllers
 
@@ -405,7 +417,10 @@ class Handler(object):
         for res_type in self._accumulated.keys():
             self._accumulated[res_type] = list()
 
-    def stop_accumulation(self):
+    def stop_accumulation(self,
+                          save_to_file=True,
+                          save_to_storage=True,
+                          print_results=True):
         means = dict()
         for key, value_list in self._accumulated.items():
             counter = 0
@@ -415,43 +430,26 @@ class Handler(object):
                     mean += value
                     counter += 1
             mean = mean / counter
-            file_d = self._dataset_specific[self._name_of_dataset_on_which_accumulating]['files'][key]
-            if self._training_step is not None:
-                file_d.write('%s %s\n' % (self._training_step, mean))
-            else:
-                file_d.write('%s\n' % (sum(value_list) / len(value_list)))
+            if save_to_file:
+                file_d = self._dataset_specific[self._name_of_dataset_on_which_accumulating]['files'][key]
+                if self._training_step is not None:
+                    file_d.write('%s %s\n' % (self._training_step, mean))
+                else:
+                    file_d.write('%s\n' % (sum(value_list) / len(value_list)))
             means[key] = mean
-        storage_keys = self._dataset_specific[self._name_of_dataset_on_which_accumulating]['storage_keys']
-        self._environment_instance.append_to_storage(
-            **dict([(storage_key, means[key]) for key, storage_key in storage_keys.items() if key != 'steps']))
-        self._print_standard_report(
-            regime='validation',
-            message='results on validation dataset %s' % self._name_of_dataset_on_which_accumulating,
-            **means)
+        if save_to_storage:
+            storage_keys = self._dataset_specific[self._name_of_dataset_on_which_accumulating]['storage_keys']
+            self._environment_instance.append_to_storage(
+                **dict([(storage_key, means[key]) for key, storage_key in storage_keys.items() if key != 'steps']))
+        if print_results:
+            self._print_standard_report(
+                regime='validation',
+                message='results on validation dataset %s' % self._name_of_dataset_on_which_accumulating,
+                **means)
         self._training_step = None
         self._name_of_dataset_on_which_accumulating = None
         self._save_accumulated_tensors()
-
-    # def _effectiveness_specs(self,
-    #                          loss=None,
-    #                          prediction=None,
-    #                          labels=None):
-    #     if prediction is not None:
-    #         perplexity = compute_perplexity(prediction)
-    #     else:
-    #         perplexity = None
-    #     if loss is None:
-    #         if prediction is not None and labels is not None:
-    #             loss = compute_loss(prediction, labels)
-    #     if prediction is not None and labels is not None:
-    #         accuracy = compute_accuracy(prediction, labels)
-    #     else:
-    #         accuracy = None
-    #     if self._bpc and loss is not None:
-    #         bpc = loss / np.log(2)
-    #     else:
-    #         bpc = None
-    #     return [loss, perplexity, accuracy, bpc]
+        return means
 
     def _process_validation_results(self,
                                     step,
@@ -491,6 +489,17 @@ class Handler(object):
             self._train_files[descriptor].write('%s %s\n' % (step, datum))
         elif processing_type == 'validation':
             self._dataset_specific[dataset_name]['files'][descriptor].write('%s %s\n' % (step, datum))
+
+    def _save_launch_results(self, results, hp):
+        for dataset_name, res in results.items():
+            values = list()
+            all_together = dict(hp.items())
+            #print('dataset_name:', dataset_name)
+            #print('all_together:', all_together)
+            all_together.update(res)
+            for key in self._order:
+                values.append(all_together[key])
+            self._file_descriptors[dataset_name].write(self._tmpl % tuple(values))
 
     def _save_several_data(self,
                            descriptors,
@@ -535,7 +544,7 @@ class Handler(object):
 
             if self._train_tensor_schedule is not None:
                 additional_tensors = self._get_additional_tensors(self._train_tensor_schedule, step, pointer)
-            tensors.extend(additional_tensors)
+                tensors.extend(additional_tensors)
         if regime == 'validation':
             tensors.append(self._hooks['validation_predictions'])
             for res_type in self._result_types:
@@ -546,7 +555,7 @@ class Handler(object):
 
             if self._validation_tensor_schedule is not None:
                 additional_tensors = self._get_additional_tensors(self._validation_tensor_schedule, step, pointer)
-            tensors.extend(additional_tensors)
+                tensors.extend(additional_tensors)
         #print(tensors)
         return tensors
 
@@ -605,6 +614,18 @@ class Handler(object):
                 else:
                     for idx, elem in res.items():
                         print('\n\n[%s]:' % idx, elem)
+
+    def _print_launch_results(self, results, hp, idx=None, indent=2):
+        if indent != 0:
+            print('\n' * (indent - 1))
+        for key in self._order:
+            if key in hp:
+                print('results on %s dataset: %s' % (key, hp[key]))
+        for dataset_name, res in results.items():
+            print('%s:' % dataset_name)
+            for key in self._order:
+                if key in res:
+                    print('%s: %s' % (key, res[key]))
 
     def _accumulate_tensors(self, step, tensors):
         pass
@@ -692,24 +713,40 @@ class Handler(object):
         basic_borders = self._last_run_tensor_order['basic']['borders']
         tmp = train_res[basic_borders[0]+1:basic_borders[1]]
 
-        if step % (self._results_collect_interval * self._print_per_collected) == 0:
-            if self._bpc:
-                [loss, perplexity, accuracy, bpc] = tmp
-                self._print_standard_report(indents=[2, 0],
-                                            step=step,
-                                            loss=loss,
-                                            bpc=bpc,
-                                            perplexity=perplexity,
-                                            accuracy=accuracy,
-                                            message='results on train dataset')
-            else:
-                [loss, perplexity, accuracy] = tmp
-                self._print_standard_report(indents=[2, 0],
-                                            step=step,
-                                            loss=loss,
-                                            perplexity=perplexity,
-                                            accuracy=accuracy,
-                                            message='results on train dataset')
+        if self._results_collect_interval is not None:
+            if step % (self._results_collect_interval * self._print_per_collected) == 0:
+                if self._bpc:
+                    [loss, perplexity, accuracy, bpc] = tmp
+                    self._print_standard_report(indents=[2, 0],
+                                                step=step,
+                                                loss=loss,
+                                                bpc=bpc,
+                                                perplexity=perplexity,
+                                                accuracy=accuracy,
+                                                message='results on train dataset')
+                else:
+                    [loss, perplexity, accuracy] = tmp
+                    self._print_standard_report(indents=[2, 0],
+                                                step=step,
+                                                loss=loss,
+                                                perplexity=perplexity,
+                                                accuracy=accuracy,
+                                                message='results on train dataset')
+            if step % self._results_collect_interval == 0:
+                if self._bpc:
+                    self._save_several_data(['loss', 'perplexity', 'accuracy', 'bpc'],
+                                            step,
+                                            [loss, perplexity, accuracy, bpc])
+                    self._environment_instance.append_to_storage(loss=loss,
+                                                                 bpc=bpc,
+                                                                 perplexity=perplexity,
+                                                                 accuracy=accuracy)
+                else:
+                    self._save_several_data(['loss', 'perplexity', 'accuracy'], step, [loss, perplexity, accuracy])
+                    self._environment_instance.append_to_storage(loss=loss,
+                                                                 perplexity=perplexity,
+                                                                 accuracy=accuracy)
+        self._save_tensors(train_res[3:])
         print_borders = self._last_run_tensor_order['train_print_tensors']['borders']
         if print_borders[1] - print_borders[0] > 0:
             print_instructions = self._form_train_tensor_print_instructions(step,
@@ -723,23 +760,13 @@ class Handler(object):
             self._print_tensors(print_instructions,
                                 print_step=not other_stuff_is_printed,
                                 indent=indent)
-        if step % self._results_collect_interval == 0:
-            if self._bpc:
-                self._save_several_data(['loss', 'perplexity', 'accuracy', 'bpc'],
-                                        step,
-                                        [loss, perplexity, accuracy, bpc])
-                self._environment_instance.append_to_storage(loss=loss,
-                                                             bpc=bpc,
-                                                             perplexity=perplexity,
-                                                             accuracy=accuracy)
-            else:
-                self._save_several_data(['loss', 'perplexity', 'accuracy'], step, [loss, perplexity, accuracy])
-                self._environment_instance.append_to_storage(loss=loss,
-                                                             perplexity=perplexity,
-                                                             accuracy=accuracy)
-        self._save_tensors(train_res[3:])
 
-    def process_results(self, step, res, regime):
+    def _several_launches_results_processing(self, hp, results):
+        self._environment_instance.append_to_storage(launches=(results, hp))
+        self._save_launch_results(results, hp)
+        self._print_launch_results(results, hp)
+
+    def _fork_process_results(self, step, res, regime):
         if regime == 'train':
             self._process_train_results(step, res)
         if regime == 'validation':
@@ -771,7 +798,7 @@ def perplexity_tensor(**kwargs):
             probabilities_shape = probabilities.get_shape().as_list()
             length = probabilities_shape[1]
             _, switch = tf.split(labels, [length, 1], axis=1)
-    switch = tf.reshape(switch, [-1])
+            switch = tf.reshape(switch, [-1])
     ln2 = np.log(2)
     shape = probabilities.get_shape().as_list()
     probabilities = tf.where(probabilities > 1e-10, probabilities, np.full(tuple(shape), 1e-10))
@@ -799,11 +826,11 @@ def loss_tensor(**kwargs):
             predictions_shape = predictions.get_shape().as_list()
             length = predictions_shape[1]
             labels, switch = tf.split(labels, [length, 1], axis=1)
-    switch = tf.reshape(switch, [-1])
+            switch = tf.reshape(switch, [-1])
     shape = predictions.get_shape().as_list()
     predictions = tf.where(predictions > 1e-10, predictions, np.full(tuple(shape), 1e-10))
     log_predictions = tf.log(predictions)
-    loss_on_characters = tf.reduce_sum(-labels * log_predictions, axis=1) * switch
+    loss_on_characters = tf.reduce_sum(-labels * log_predictions, axis=1)
     if 'dialog_switch' in special_args:
         if special_args['dialog_switch']:
             loss_on_characters = loss_on_characters * switch
@@ -827,7 +854,7 @@ def accuracy_tensor(**kwargs):
             predictions_shape = predictions.get_shape().as_list()
             length = predictions_shape[1]
             labels, switch = tf.split(labels, [length, 1], axis=1)
-    switch = tf.reshape(switch, [-1])
+            switch = tf.reshape(switch, [-1])
     predictions = tf.argmax(predictions, axis=1)
     labels = tf.argmax(labels, axis=1)
     accuracy = tf.to_float(tf.equal(predictions, labels))
@@ -1007,18 +1034,18 @@ class Environment(object):
         else:
             default_dataset = None
         _, gens = zip(*sorted(self._batch_generator_classes.items()))
-        default_batch_generator = gens[0]
+        self._default_batch_generator = gens[0]
         self._default_train_method_args = dict(
-            start_specs={'allow_soft_placement': False,
-                         'gpu_memory': None,
-                         'log_device_placement': False,
-                         'restore_path': None,
+            session_specs={'allow_soft_placement': False,
+                           'gpu_memory': None,
+                           'log_device_placement': False},
+            start_specs={'restore_path': None,
                          'save_path': None,
                          'result_types': self.put_result_types_in_correct_order(
                              ['loss', 'perplexity', 'accuracy']),
                          'summary': False,
                          'add_graph_to_summary': False,
-                         'batch_generator_class': default_batch_generator},
+                         'batch_generator_class': self._default_batch_generator},
             run=dict(
                 train_specs={'assistant': None,
                              'learning_rate': construct(default_learning_rate_control),
@@ -1061,6 +1088,9 @@ class Environment(object):
             :type kwargs: dictionary"""
 
         # checking if passed required arguments
+        self._build(kwargs)
+
+    def _build(self, kwargs):
         self._pupil_class.check_kwargs(**kwargs)
 
         # Building the graph
@@ -1096,7 +1126,6 @@ class Environment(object):
     def _add_hook(self, builder_name, model_type='pupil'):
         if builder_name in self._builders:
             builder = self._builders[builder_name]
-            print(builder_name)
             kwargs = self._arguments_for_new_tensor_building(builder['hooks'],
                                                              builder['tensor_names'])
             kwargs['special_args'] = builder['special_args']
@@ -1252,10 +1281,13 @@ class Environment(object):
                   validation_batch_size,
                   valid_batch_kwargs,
                   training_step=None,
-                  additional_feed_dict=None):
-
+                  additional_feed_dict=None,
+                  save_to_file=True,
+                  save_to_storage=True,
+                  print_results=True):
         if 'reset_validation_state' in self._pupil_hooks:
             self._session.run(self._pupil_hooks['reset_validation_state'])
+        #print('batch_generator_class:', batch_generator_class)
         valid_batches = batch_generator_class(validation_dataset[0], validation_batch_size, **valid_batch_kwargs)
         length = valid_batches.get_dataset_length()
         inputs, labels = valid_batches.next()
@@ -1272,7 +1304,10 @@ class Environment(object):
             self._handler.process_results(training_step, valid_res, 'validation')
             step += 1
             inputs, labels = valid_batches.next()
-        self._handler.stop_accumulation()
+        means = self._handler.stop_accumulation(save_to_file=save_to_file,
+                                                save_to_storage=save_to_storage,
+                                                print_results=print_results)
+        return means
 
     def _from_random_fuse(self):
         pass
@@ -1290,16 +1325,37 @@ class Environment(object):
                 returned_list.append(tensor_alias)
         return returned_list
 
-    def _all_tensor_aliases_from_train_arguments(self, start_specs, run_specs_set):
-        list_of_required_tensors_aliases = list()
-        list_of_required_tensors_aliases.extend(start_specs['result_types'])
-        for result_type in start_specs['result_types']:
-            list_of_required_tensors_aliases.append('validation_' + result_type)
+    def _check_if_validation_is_needed(self, run_specs_set):
+        """This method is not finished yet. Fuses, random and replicas should also be taken in account"""
+        validation_is_needed = False
         for run_specs in run_specs_set:
-            train_aliases = self._get_all_tensors_from_schedule(run_specs['schedule']['train_tensor_schedule'])
-            list_of_required_tensors_aliases.extend(train_aliases)
-            valid_aliases = self._get_all_tensors_from_schedule(run_specs['schedule']['validation_tensor_schedule'])
-            list_of_required_tensors_aliases.extend(valid_aliases)
+            validation_is_needed = validation_is_needed or \
+                                   not run_specs['train_specs']['no_validation']
+        return validation_is_needed
+
+    def _all_tensor_aliases_from_arguments(self, args_for_launches, evaluation=None):
+        start_specs_for_launches, run_specs_for_launches = zip(*args_for_launches)
+        list_of_required_tensors_aliases = list()
+        result_types_for_launches = list()
+        for start_specs in start_specs_for_launches:
+            result_types_for_launches = add_missing_to_list(result_types_for_launches, start_specs['result_types'])
+        list_of_required_tensors_aliases.extend(result_types_for_launches)
+        for run_specs_set in run_specs_for_launches:
+            if self._check_if_validation_is_needed(run_specs_set):
+                for result_type in start_specs['result_types']:
+                    list_of_required_tensors_aliases.append('validation_' + result_type)
+        for run_specs_set in run_specs_for_launches:
+            for run_specs in run_specs_set:
+                train_aliases = self._get_all_tensors_from_schedule(run_specs['schedule']['train_tensor_schedule'])
+                list_of_required_tensors_aliases = add_missing_to_list(list_of_required_tensors_aliases, train_aliases)
+                valid_aliases = self._get_all_tensors_from_schedule(run_specs['schedule']['validation_tensor_schedule'])
+                list_of_required_tensors_aliases = add_missing_to_list(list_of_required_tensors_aliases, valid_aliases)
+        if evaluation is not None:
+            if 'train' in evaluation['datasets'] and len(evaluation['datasets']) > 1:
+                for result_type in evaluation['result_types']:
+                    alias = 'validation_' + result_type
+                    if alias not in list_of_required_tensors_aliases:
+                        list_of_required_tensors_aliases.append(alias)
         return list_of_required_tensors_aliases
 
     def _create_missing_hooks(self, list_of_tensor_aliases, model_type='pupil'):
@@ -1357,24 +1413,23 @@ class Environment(object):
         collect_interval = to_be_collected_while_training['results_collect_interval']
         print_per_collected = to_be_collected_while_training['print_per_collected']
 
-        valid_period = collect_interval * print_per_collected
-        if train_specs['no_validation']:
+        if train_specs['no_validation'] or collect_interval is False:
             it_is_time_for_validation = Controller(self._storage,
                                                    {'type': 'always_false'})
         else:
+            valid_period = collect_interval * print_per_collected
             it_is_time_for_validation = Controller(self._storage,
                                                    {'type': 'periodic_truth',
                                                     'period': valid_period})
 
-        if train_specs['checkpoint_steps'] is not None:
+        if train_specs['checkpoint_steps'] is not None and checkpoints_path is not None:
             if train_specs['checkpoint_steps']['type'] == 'true_on_steps':
                 for idx in range(len(train_specs['checkpoint_steps']['steps'])):
                     train_specs['checkpoint_steps']['steps'][idx] += init_step
             it_is_time_to_create_checkpoint = Controller(self._storage, train_specs['checkpoint_steps'])
         else:
             it_is_time_to_create_checkpoint = Controller(self._storage,
-                                                         {'type': 'true_on_steps',
-                                                          'steps': []})
+                                                         {'type': 'always_false'})
 
         batch_size_controller = Controller(self._storage, train_specs['batch_size'])
         batch_size_change_tracker_specs = Controller.create_change_tracking_specifications(train_specs['batch_size'])
@@ -1465,12 +1520,12 @@ class Environment(object):
                         valid_add_feed_dict = dict()
                         for addition, add_controller in zip(train_feed_dict_additions, additional_controllers):
                             valid_add_feed_dict[self._pupil_hooks[addition['placeholder']]] = add_controller.get()
-                    self._validate(batch_generator_class,
-                                   validation_dataset,
-                                   train_specs['validation_batch_size'],
-                                   train_specs['valid_batch_kwargs'],
-                                   training_step=step,
-                                   additional_feed_dict=valid_add_feed_dict)
+                    _ = self._validate(batch_generator_class,
+                                       validation_dataset,
+                                       train_specs['validation_batch_size'],
+                                       train_specs['valid_batch_kwargs'],
+                                       training_step=step,
+                                       additional_feed_dict=valid_add_feed_dict)
             step += 1
             self.set_in_storage(step=step)
         return step
@@ -1501,7 +1556,7 @@ class Environment(object):
                 elif isinstance(value, int):
                     set_of_kwargs[key] = {'type': 'true_on_steps', 'steps': [value]}
                 else:
-                    set_of_kwargs[key] = None
+                    set_of_kwargs[key] = {'type': 'always_false'}
                 self._set_controller_name_in_specs(set_of_kwargs[key], 'checkpoint_steps')
             if key == 'learning_rate':
                 self._set_controller_name_in_specs(set_of_kwargs[key], 'learning_rate')
@@ -1793,54 +1848,170 @@ class Environment(object):
                                                         kwargs,
                                                         set_passed_parameters_as_default=
                                                         set_passed_parameters_as_default)
-
+        session_specs = tmp_output['session_specs']
         start_specs = tmp_output['start_specs']
         run_specs_set = tmp_output['run']
-        batch_generator_class = start_specs['batch_generator_class']
-        all_tensor_aliases = self._all_tensor_aliases_from_train_arguments(start_specs, run_specs_set)
+        all_tensor_aliases = self._all_tensor_aliases_from_arguments([(start_specs, run_specs_set)])
         self._create_missing_hooks(all_tensor_aliases)
 
         if start_session:
-            self._start_session(start_specs['allow_soft_placement'],
-                                start_specs['log_device_placement'],
-                                start_specs['gpu_memory'])
+            self._start_session(session_specs['allow_soft_placement'],
+                                session_specs['log_device_placement'],
+                                session_specs['gpu_memory'])
+        self._train_repeatedly(start_specs, run_specs_set)
+        if close_session:
+            self._close_session()
 
+    def _train_repeatedly(self, start_specs, run_specs_set):
         # initializing model
         if start_specs['restore_path'] is not None:
             self._hooks['saver'].restore(self._session, start_specs['restore_path'])
         else:
             self._session.run(tf.global_variables_initializer())
 
-        compute_bpc = 'bpc' in start_specs['result_types']
         self._handler = Handler(self,
                                 self._pupil_hooks,
                                 'train',
                                 start_specs['save_path'],
                                 start_specs['result_types'],
                                 summary=start_specs['summary'],
-                                bpc=compute_bpc,
                                 add_graph_to_summary=start_specs['add_graph_to_summary'])
-
-        checkpoints_path = start_specs['save_path'] + '/checkpoints'
-        create_path(checkpoints_path)
+        if start_specs['save_path'] is not None:
+            checkpoints_path = start_specs['save_path'] + '/checkpoints'
+            create_path(checkpoints_path)
+        else:
+            checkpoints_path = None
         init_step = 0
         for run_specs in run_specs_set:
             init_step = self._train(run_specs,
                                     checkpoints_path,
-                                    batch_generator_class,
+                                    start_specs['batch_generator_class'],
                                     init_step=init_step)
-        self._create_checkpoint('final', checkpoints_path)
+        if checkpoints_path is not None:
+            self._create_checkpoint('final', checkpoints_path)
         self._handler.close()
-        if close_session:
-            self._close_session()
 
+    def _several_launches_without_rebuilding(self,
+                                             queue,
+                                             kwargs_for_building,
+                                             session_specs,
+                                             args_for_launches,
+                                             evaluation):
 
+        self._build(kwargs_for_building)
+        #print('args_for_launches:', args_for_launches)
+        all_tensor_aliases = self._all_tensor_aliases_from_arguments(args_for_launches, evaluation=evaluation)
+        #print('all_tensor_aliases:', all_tensor_aliases)
+        self._create_missing_hooks(all_tensor_aliases)
+        self._start_session(session_specs['allow_soft_placement'],
+                            session_specs['log_device_placement'],
+                            session_specs['gpu_memory'])
+        datasets = evaluation['datasets']
+        if 'train' in datasets:
+            del datasets['train']
+        if evaluation['batch_gen_class'] is None:
+            eval_batch_gen_class = self._default_batch_generator
+        else:
+            eval_batch_gen_class = evaluation['batch_gen_class']
+        for start_specs, run_specs_set in args_for_launches:
+            result = dict()
+            self._train_repeatedly(start_specs, run_specs_set)
+            if 'train' in evaluation['datasets']:
+                tr_res = dict()
+                for key, res in self._storage.items():
+                    if '_' not in key:
+                        tr_res[key] = res
+                result['train'] = tr_res
+            self._handler = Handler(self,
+                                    self._pupil_hooks,
+                                    'test',
+                                    None,
+                                    evaluation['result_types'])
+            for dataset_name, dataset in datasets.items():
+                #print('dataset_name:', dataset_name)
+                #print('dataset:', dataset)
+                means = self._validate(eval_batch_gen_class,
+                                       dataset,
+                                       evaluation['batch_size'],
+                                       evaluation['batch_kwargs'],
+                                       additional_feed_dict=evaluation['additional_feed_dict'],
+                                       save_to_file=False,
+                                       save_to_storage=False,
+                                       print_results=False)
+                result[dataset_name] = means
+            #print('result in process:', result)
+            queue.put(result)
 
+    def _form_list_of_kwargs(self, kwargs, hyperparameters):
+        output = [(construct(kwargs), dict(), list())]
+        lengths = list()
+        for name, values in hyperparameters.items():
+            new_output = list()
+            lengths.append(len(values))
+            for base in output:
+                for idx, value in enumerate(values):
+                    new_base = construct(base)
+                    paste_into_nested_dictionary(new_base[0], name, value)
+                    new_base[1][name] = value
+                    new_base[2].append(idx)
+                    new_output.append(new_base)
+            output = new_output
+        sorting_factors = [1]
+        for length in reversed(lengths[1:]):
+            sorting_factors.append(sorting_factors[-1] * length)
+        output = sorted(output,
+                        key=lambda set: sum(
+                            [point_idx*sorting_factor \
+                             for point_idx, sorting_factor in zip(reversed(set[2][1:]), sorting_factors)]))
+        return output
 
+    def several_launches(self,
+                         evaluation,
+                         kwargs_for_building,
+                         args_for_launches=None,
+                         build_hyperparameters=None,
+                         other_hyperparameters=None,
+                         **kwargs):
+        tmp_output = self._parse_train_method_arguments([],
+                                                        kwargs,
+                                                        set_passed_parameters_as_default=False)
+        session_specs = tmp_output['session_specs']
+        list_of_build_kwargs = self._pupil_class.form_list_of_kwargs(kwargs_for_building,
+                                                                     build_hyperparameters)
 
+        list_of_build_kwargs, list_of_build_hp_values, _ = zip(*list_of_build_kwargs)
+        base = tmp_output
+        del base['session_specs']
 
+        args_for_launches = self._form_list_of_kwargs(base, other_hyperparameters)
 
+        args_for_launches, hp_values_list, _ = zip(*args_for_launches)
 
-
-
+        refactored = list()
+        for args in args_for_launches:
+            start_specs = args['start_specs']
+            run_specs_set = args['run']
+            refactored.append((start_specs, run_specs_set))
+        args_for_launches = refactored
+        hp = list(build_hyperparameters.keys())
+        hp.extend(list(other_hyperparameters.keys()))
+        self._handler = Handler(self,
+                                self._pupil_hooks,
+                                'several_launches',
+                                evaluation['save_path'],
+                                evaluation['result_types'],
+                                eval_dataset_names=list(evaluation['datasets'].keys()),
+                                hyperparameters=hp)
+        for build_kwargs, build_hp_values in zip(list_of_build_kwargs, list_of_build_hp_values):
+            queue = mp.Queue()
+            p = mp.Process(target=self._several_launches_without_rebuilding,
+                           args=(queue, build_kwargs, session_specs, args_for_launches, evaluation))
+            p.start()
+            for idx in range(len(args_for_launches)):
+                hp = hp_values_list[idx]
+                res = queue.get()
+                #print('res:', res)
+                hp.update(build_hp_values)
+                self._handler.process_results(hp, res)
+            p.join()
 

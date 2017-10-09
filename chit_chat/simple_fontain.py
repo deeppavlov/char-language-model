@@ -3,7 +3,7 @@ import math
 import re
 import tensorflow as tf
 from model import Model
-from some_useful_functions import create_vocabulary, char2id, get_positions_in_vocabulary
+from some_useful_functions import create_vocabulary, char2id, get_positions_in_vocabulary, construct
 
 
 def char2vec(characters_positions_in_vocabulary,
@@ -47,6 +47,7 @@ def add_flags_2_simple_text(input_file_name,
 
 
 def process_input_text(text):
+    #print('text:', text)
     splitted = text.split('<')
     number_of_speakers = 0
     counter = 0
@@ -73,10 +74,16 @@ def process_input_text(text):
             bot_answer_flags.extend([current_bot_answer_flag]*length)
             counter += length
         elif re.match("EOD>", chunk) is not None:
-            eod_flags[-1] = 1
-    bot_answer_flags = bot_answer_flags[:-1]
-    if splitted[-1][-1] == '\n' or speaker_flags[-1] == 1:
-        bot_answer_flags.append(0)
+            if len(eod_flags) > 0:
+                eod_flags[-1] = 1
+    bot_answer_flags = bot_answer_flags[1:]
+    # print('len(splitted[-1]) =', len(splitted[-1]))
+    # print('len(speaker_flags) =', len(speaker_flags))
+    if len(splitted[-1]) > 0:
+        if splitted[-1][-1] == '\n' or speaker_flags[-1] != 0:
+            bot_answer_flags.append(0)
+        else:
+            bot_answer_flags.append(0)
     else:
         bot_answer_flags.append(1)
     return [new_text, eod_flags, speaker_flags, bot_answer_flags, number_of_speakers]
@@ -185,6 +192,56 @@ class SimpleFontain(Model):
     @staticmethod
     def get_special_args():
         return {'dialog_switch': True}
+
+    @staticmethod
+    def form_list_of_kwargs(kwargs_for_building, build_hyperparameters):
+        output = [[kwargs_for_building]]
+        hp_names = list()
+        lengths = list()
+        for param_name, values in build_hyperparameters.items():
+            hp_names.append(param_name)
+            lengths.append(len(values))
+            new_output = list()
+            for idx, value in enumerate(values):
+                for base in output:
+                    new_base = construct(base)
+                    new_base[0][param_name] = value
+                    new_base.append(idx)
+                    new_output.append(new_base)
+            output = new_output
+        sorting_factors = [1]
+        for length in reversed(lengths[1:]):
+            sorting_factors.append(sorting_factors[-1] * length)
+
+        output = sorted(output,
+                        key=lambda set: sum(
+                            [point_idx*sorting_factor \
+                             for point_idx, sorting_factor in zip(reversed(set[1:], sorting_factors))]))
+        return output, hp_names
+
+    @staticmethod
+    def form_list_of_kwargs(kwargs_for_building, build_hyperparameters):
+        output = [(construct(kwargs_for_building), dict(), list())]
+        lengths = list()
+        for name, values in build_hyperparameters.items():
+            new_output = list()
+            lengths.append(len(values))
+            for base in output:
+                for idx, value in enumerate(values):
+                    new_base = construct(base)
+                    new_base[0][name] = value
+                    new_base[1][name] = value
+                    new_base[2].append(idx)
+                    new_output.append(new_base)
+            output = new_output
+        sorting_factors = [1]
+        for length in reversed(lengths[1:]):
+            sorting_factors.append(sorting_factors[-1] * length)
+        output = sorted(output,
+                        key=lambda set: sum(
+                            [point_idx*sorting_factor \
+                             for point_idx, sorting_factor in zip(reversed(set[2][1:]), sorting_factors)]))
+        return output
 
     def _layer(self,
                idx,
@@ -510,7 +567,8 @@ class SimpleFontain(Model):
 
             [inputs, bot_answer_flags, eod_flags] = tf.split(self.inputs,
                                                              [self._vocabulary_size + self._flag_size, 1, 1],
-                                                             axis=2)
+                                                             axis=2,
+                                                             name='inputs_and_flags')
 
             inputs = tf.unstack(inputs)
             eod_flags = tf.unstack(eod_flags)

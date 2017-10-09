@@ -1,4 +1,5 @@
 import numpy as np
+import inspect
 
 
 def create_vocabulary(text):
@@ -55,3 +56,27 @@ def load_vocabulary_from_file(vocabulary_file_name):
     input_f = open(vocabulary_file_name, 'r', encoding='utf-8')
     vocabulary_string = input_f.read()
     return list(vocabulary_string)
+
+
+def construct(obj):
+    """Used for preventing of not expected changing of class attributes"""
+    if isinstance(obj, dict):
+        new_obj = dict()
+        for key, value in obj.items():
+            new_obj[key] = construct(value)
+    elif isinstance(obj, list):
+        new_obj = list()
+        for value in obj:
+            new_obj.append(construct(value))
+    elif isinstance(obj, tuple):
+        base = list()
+        for value in obj:
+            base.append(construct(value))
+        new_obj = tuple(base)
+    elif isinstance(obj, str):
+        new_obj = str(obj)
+    elif isinstance(obj, (int, float, complex, type(None))) or inspect.isclass(obj):
+        new_obj = obj
+    else:
+        raise TypeError("Object of unsupported type was passed to construct function: %s" % type(obj))
+    return new_obj
