@@ -620,12 +620,12 @@ class Handler(object):
             print('\n' * (indent - 1))
         for key in self._order:
             if key in hp:
-                print('results on %s dataset: %s' % (key, hp[key]))
+                print('%s: %s' % (key, hp[key]))
         for dataset_name, res in results.items():
             print('%s:' % dataset_name)
             for key in self._order:
                 if key in res:
-                    print('%s: %s' % (key, res[key]))
+                    print('results on %s dataset: %s' % (key, res[key]))
 
     def _accumulate_tensors(self, step, tensors):
         pass
