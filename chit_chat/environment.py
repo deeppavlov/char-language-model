@@ -132,6 +132,18 @@ def paste_into_nested_dictionary(dictionary, searched_key, value_to_paste):
                 paste_into_nested_dictionary(value, searched_key, value_to_paste)
 
 
+def check_if_key_in_nested_dict(dictionary, keys):
+    new_key_list = keys[1:]
+    if keys[0] not in dictionary:
+        return False
+    if len(new_key_list) == 0:
+        return True
+    value = dictionary[keys[0]]
+    if not isinstance(value, dict):
+        return False
+    return check_if_key_in_nested_dict(value, new_key_list)
+
+
 def search_in_nested_dictionary(dictionary, searched_key):
     for key, value in dictionary.items():
         if key == searched_key:
@@ -302,7 +314,8 @@ class Handler(object):
                 self._writer = tf.summary.FileWriter(self._save_path + '/' + 'summary')
                 if add_graph_to_summary:
                     self._writer.add_graph(tf.get_default_graph())
-            self._environment_instance.init_storage(steps=list(),
+            self._environment_instance.init_storage('train',
+                                                    steps=list(),
                                                     loss=list(),
                                                     perplexity=list(),
                                                     accuracy=list(),
@@ -339,7 +352,7 @@ class Handler(object):
                 self._file_descriptors[dataset_name] = open(self._save_path + '/' + dataset_name + '.txt',
                                                             'a')
                 self._file_descriptors[dataset_name].write(self._tmpl % tuple(self._order))
-            self._environment_instance.init_storage(launches=list())
+            self._environment_instance.set_in_storage(launches=list())
 
         # The order in which tensors are presented in the list returned by get_additional_tensors method
         # It is a list. Each element is either tensor alias or a tuple if corresponding hook is pointing to a list of
@@ -373,21 +386,14 @@ class Handler(object):
                                                        '/' +
                                                        'tensors_validation_%s.pickle' % dataset_name,
                                                        'ab')
-                    new_storage_keys = dict()
-                    new_storage_keys['steps'] = 'valid_%s_steps' % dataset_name
-                    new_storage_keys['loss'] = 'valid_%s_loss' % dataset_name
-                    new_storage_keys['perplexity'] = 'valid_%s_perplexity' % dataset_name
-                    new_storage_keys['accuracy'] = 'valid_%s_accuracy' % dataset_name
-                    if self._bpc:
-                        new_storage_keys['bpc'] = 'valid_%s_bpc' % dataset_name
+
                     self._dataset_specific[dataset_name] = {'name': dataset_name,
-                                                            'files': new_files,
-                                                            'storage_keys': new_storage_keys}
+                                                            'files': new_files}
                     init_dict = dict()
-                    for storage_key in new_storage_keys.values():
-                        if not self._environment_instance.check_if_key_in_storage(storage_key):
-                            init_dict[storage_key] = list()
-                    self._environment_instance.init_storage(**init_dict)
+                    for key in self._result_types:
+                        if not self._environment_instance.check_if_key_in_storage([dataset_name, key]):
+                            init_dict[key] = list()
+                    self._environment_instance.init_storage(dataset_name, **init_dict)
             for key in self._dataset_specific.keys():
                 if key not in validation_dataset_names:
                     for file_d in self._dataset_specific[key]['files'].values():
@@ -423,13 +429,17 @@ class Handler(object):
                           print_results=True):
         means = dict()
         for key, value_list in self._accumulated.items():
+            #print('%s:' % key, value_list)
             counter = 0
             mean = 0
             for value in value_list:
-                if value != -1.:
+                if value >= 0.:
                     mean += value
                     counter += 1
-            mean = mean / counter
+            if counter == 0:
+                mean = 0.
+            else:
+                mean = mean / counter
             if save_to_file:
                 file_d = self._dataset_specific[self._name_of_dataset_on_which_accumulating]['files'][key]
                 if self._training_step is not None:
@@ -438,9 +448,8 @@ class Handler(object):
                     file_d.write('%s\n' % (sum(value_list) / len(value_list)))
             means[key] = mean
         if save_to_storage:
-            storage_keys = self._dataset_specific[self._name_of_dataset_on_which_accumulating]['storage_keys']
-            self._environment_instance.append_to_storage(
-                **dict([(storage_key, means[key]) for key, storage_key in storage_keys.items() if key != 'steps']))
+            self._environment_instance.append_to_storage(self._name_of_dataset_on_which_accumulating,
+                **dict([(key, means[key]) for key in self._result_types]))
         if print_results:
             self._print_standard_report(
                 regime='validation',
@@ -712,40 +721,50 @@ class Handler(object):
         #print(self._last_run_tensor_order)
         basic_borders = self._last_run_tensor_order['basic']['borders']
         tmp = train_res[basic_borders[0]+1:basic_borders[1]]
+        if self._bpc:
+            [loss, perplexity, accuracy, bpc] = tmp
+        else:
+            [loss, perplexity, accuracy] = tmp
 
+        if self._printed_result_types is not None:
+            if self._results_collect_interval is not None:
+                if step % (self._results_collect_interval * self._print_per_collected) == 0:
+                    if self._bpc:
+                        self._print_standard_report(indents=[2, 0],
+                                                    step=step,
+                                                    loss=loss,
+                                                    bpc=bpc,
+                                                    perplexity=perplexity,
+                                                    accuracy=accuracy,
+                                                    message='results on train dataset')
+                    else:
+                        self._print_standard_report(indents=[2, 0],
+                                                    step=step,
+                                                    loss=loss,
+                                                    perplexity=perplexity,
+                                                    accuracy=accuracy,
+                                                    message='results on train dataset')
         if self._results_collect_interval is not None:
-            if step % (self._results_collect_interval * self._print_per_collected) == 0:
-                if self._bpc:
-                    [loss, perplexity, accuracy, bpc] = tmp
-                    self._print_standard_report(indents=[2, 0],
-                                                step=step,
-                                                loss=loss,
-                                                bpc=bpc,
-                                                perplexity=perplexity,
-                                                accuracy=accuracy,
-                                                message='results on train dataset')
-                else:
-                    [loss, perplexity, accuracy] = tmp
-                    self._print_standard_report(indents=[2, 0],
-                                                step=step,
-                                                loss=loss,
-                                                perplexity=perplexity,
-                                                accuracy=accuracy,
-                                                message='results on train dataset')
             if step % self._results_collect_interval == 0:
                 if self._bpc:
-                    self._save_several_data(['loss', 'perplexity', 'accuracy', 'bpc'],
-                                            step,
-                                            [loss, perplexity, accuracy, bpc])
-                    self._environment_instance.append_to_storage(loss=loss,
+                    if self._save_path is not None:
+                        self._save_several_data(['loss', 'perplexity', 'accuracy', 'bpc'],
+                                                step,
+                                                [loss, perplexity, accuracy, bpc])
+                    self._environment_instance.append_to_storage('train',
+                                                                 loss=loss,
                                                                  bpc=bpc,
                                                                  perplexity=perplexity,
-                                                                 accuracy=accuracy)
+                                                                 accuracy=accuracy,
+                                                                 steps=step)
                 else:
-                    self._save_several_data(['loss', 'perplexity', 'accuracy'], step, [loss, perplexity, accuracy])
-                    self._environment_instance.append_to_storage(loss=loss,
+                    if self._save_path is not None:
+                        self._save_several_data(['loss', 'perplexity', 'accuracy'], step, [loss, perplexity, accuracy])
+                    self._environment_instance.append_to_storage('train',
+                                                                 loss=loss,
                                                                  perplexity=perplexity,
-                                                                 accuracy=accuracy)
+                                                                 accuracy=accuracy,
+                                                                 steps=step)
         self._save_tensors(train_res[3:])
         print_borders = self._last_run_tensor_order['train_print_tensors']['borders']
         if print_borders[1] - print_borders[0] > 0:
@@ -762,7 +781,7 @@ class Handler(object):
                                 indent=indent)
 
     def _several_launches_results_processing(self, hp, results):
-        self._environment_instance.append_to_storage(launches=(results, hp))
+        self._environment_instance.set_in_storage(launches=(results, hp))
         self._save_launch_results(results, hp)
         self._print_launch_results(results, hp)
 
@@ -1152,6 +1171,8 @@ class Environment(object):
             else:
                 actual_names.append(builder_name)
         loss_builder_names, not_loss_builder_names = self._split_to_loss_and_not_loss_names(actual_names)
+        print('loss_builder_names:', loss_builder_names)
+        print('not_loss_builder_names:', not_loss_builder_names)
         for builder_name in loss_builder_names:
             self._add_hook(builder_name, model_type=model_type)
         for builder_name in not_loss_builder_names:
@@ -1224,20 +1245,23 @@ class Environment(object):
         self._session.close()
         self._session = None
 
-    def init_storage(self, **kwargs):
+    def init_storage(self, dataset_name, **kwargs):
+        self._storage[dataset_name] = dict()
+        d = self._storage[dataset_name]
         for key, value in kwargs.items():
-            self._storage[key] = value
+            d[key] = value
 
-    def append_to_storage(self, **kwargs):
+    def append_to_storage(self, dataset_name, **kwargs):
+        d = self._storage[dataset_name]
         for key, value in kwargs.items():
-            self._storage[key].append(value)
+            d[key].append(value)
 
     def set_in_storage(self, **kwargs):
         for key, value in kwargs.items():
             self._storage[key] = value
 
-    def check_if_key_in_storage(self, key):
-        return key in self._storage
+    def check_if_key_in_storage(self, keys):
+        return check_if_key_in_nested_dict(self._storage, keys)
 
     def _create_checkpoint(self, step, checkpoints_path, model_type='pupil'):
         path = checkpoints_path + '/' + str(step)
@@ -1394,7 +1418,7 @@ class Environment(object):
         # creating batch generator
 
         # resetting step in control_storage
-        self.init_storage(step=step)
+        self.set_in_storage(step=step)
         learning_rate_controller = Controller(self._storage,
                                               train_specs['learning_rate'])
         train_feed_dict_additions = train_specs['additions_to_feed_dict']
@@ -1906,7 +1930,7 @@ class Environment(object):
         self._start_session(session_specs['allow_soft_placement'],
                             session_specs['log_device_placement'],
                             session_specs['gpu_memory'])
-        datasets = evaluation['datasets']
+        datasets = dict(evaluation['datasets'].items())
         if 'train' in datasets:
             del datasets['train']
         if evaluation['batch_gen_class'] is None:
@@ -1918,9 +1942,9 @@ class Environment(object):
             self._train_repeatedly(start_specs, run_specs_set)
             if 'train' in evaluation['datasets']:
                 tr_res = dict()
-                for key, res in self._storage.items():
-                    if '_' not in key:
-                        tr_res[key] = res
+                for key, res in self._storage['train'].items():
+                    if len(res) > 0:
+                        tr_res[key] = res[-1]
                 result['train'] = tr_res
             self._handler = Handler(self,
                                     self._pupil_hooks,
