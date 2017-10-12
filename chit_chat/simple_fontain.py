@@ -636,6 +636,9 @@ class SimpleFontain(Model):
             optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
             gradients, v = zip(*optimizer.compute_gradients(self.loss + l2_loss / l2_divider))
             gradients, _ = tf.clip_by_global_norm(gradients, 1.)
+            # print('Names of gradients:')
+            # for grad in gradients:
+            #     print(grad.name)
             self.train_op = optimizer.apply_gradients(zip(gradients, v))
 
         with tf.name_scope('validation'):

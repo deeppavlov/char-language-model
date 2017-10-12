@@ -3,21 +3,21 @@ from environment import Environment
 from simple_fontain import SimpleFontain, SimpleFontainBatcher
 from some_useful_functions import load_vocabulary_from_file, get_positions_in_vocabulary
 
-f = open('small_flagged_subs.txt', 'r', encoding='utf-8')
+f = open('datasets/small_flagged_subs.txt', 'r', encoding='utf-8')
 text = f.read()
 f.close()
 
 # different
-offset = 102
-valid_size = 100
+offset = 10002
+valid_size = 10000
 valid_text = text[-offset:-offset + valid_size]
 # print('valid_text:', valid_text)
 
 #train_text = text[0:-offset]
-train_text = text[-offset-1000:-offset]
+train_text = text[:-offset]
 train_size = len(train_text)
 
-vocabulary = load_vocabulary_from_file('subs_vocabulary.txt')
+vocabulary = load_vocabulary_from_file('datasets/subs_vocabulary.txt')
 
 cpiv = get_positions_in_vocabulary(vocabulary)
 
@@ -25,12 +25,19 @@ vocabulary_size = len(vocabulary)
 #print(vocabulary_size)
 
 env = Environment(SimpleFontain, SimpleFontainBatcher)
-env.build(batch_size=64,
-          vocabulary_size=vocabulary_size,
-          attention_interval=3,
-          attention_visibility=5,
-          subsequence_length_in_intervals=7,
-          characters_positions_in_vocabulary=cpiv)
+# env.build(batch_size=64,
+#           vocabulary_size=vocabulary_size,
+#           attention_interval=3,
+#           attention_visibility=5,
+#           subsequence_length_in_intervals=7,
+#           characters_positions_in_vocabulary=cpiv)
+
+# env.build(batch_size=2,
+#           vocabulary_size=vocabulary_size,
+#           attention_interval=2,
+#           attention_visibility=2,
+#           subsequence_length_in_intervals=2,
+#           characters_positions_in_vocabulary=cpiv)
 
 def count_non_zeros(**kwargs):
     tensor = kwargs['tensor']
@@ -121,33 +128,56 @@ def bot_answer_flags(length):
     schedule['bot_answer_flags'] = [i for i in range(length)]
     return schedule
 
+def nz_gradients(length):
+    tmpl = "train/clip_by_global_norm/train/clip_by_global_norm/_%s:0"
+    schedule = dict()
+    for i in range(13):
+        hook_name = 'grad_nz_%s' % i
+        env.register_builder('count_nz',
+                             tensor_names={'tensor': tmpl % i},
+                             output_hook_name=hook_name)
+        schedule[hook_name] = [i for i in range(length)]
+    return schedule
+
+def l2_gradients(length):
+    tmpl = "train/clip_by_global_norm/train/clip_by_global_norm/_%s:0"
+    schedule = dict()
+    for i in range(13):
+        hook_name = 'grad_l2_%s' % i
+        env.register_builder('l2_norm',
+                             tensor_names={'tensor': tmpl % i},
+                             output_hook_name=hook_name)
+        schedule[hook_name] = [i for i in range(length)]
+    return schedule
 # schedule = matrices_l2_schedule(30)
 # schedule.update(cell_states_l2(30))
 # schedule = bot_answer_flags(30)
-
-#env.print_available_builders()
+# schedule = nz_gradients(30)
+# schedule = l2_gradients(30)
+# env.print_available_builders()
 
 # env.train(save_path='debugging_simple_fontain/first',
 #           learning_rate={'type': 'exponential_decay',
 #                          'init': 3.,
 #                          'decay': .9,
 #                          'period': 500},
-#           batch_size=64,
+#           batch_size=2,
 #           vocabulary=vocabulary,
-#           checkpoint_steps=[100],
-#           stop=1000,
-#           num_unrollings=21,
+#           checkpoint_steps=None,
+#           stop=30,
+#           num_unrollings=4,
 #           #debug=0,
 #           #train_dataset_text='abx',
 #           #validation_datasets_texts=['abc'],
 #           train_dataset_text=train_text,
 #           validation_dataset_texts=[valid_text],
-#           printed_result_types=['loss', 'perplexity', 'accuracy'],
+#           result_types=['loss', 'perplexity', 'accuracy', 'bpc'],
+#           printed_result_types=['loss', 'perplexity', 'accuracy', 'bpc'],
 #           #add_graph_to_summary=True,
 #           #validation_dataset=[valid_text],
-#           results_collect_interval=50
+#           results_collect_interval=10,
 #           #no_validation=True,
-#           #train_print_tensors=schedule
+#           train_print_tensors=schedule
 #           )
 
 evaluation = dict(
@@ -169,18 +199,64 @@ kwargs_for_building = dict(
           subsequence_length_in_intervals=7,
           characters_positions_in_vocabulary=cpiv)
 
-list_of_lr = [dict(type='exponential_decay', init=v, decay=.9, period=500) for v in [10., 5., 3., 1., .3]]
+list_of_lr = [
+    dict(type='exponential_decay', init=v, decay=.9, period=500, name='learning_rate') for v in [10., 5., 3., 1., .3]]
+# list_of_lr = [dict(type='exponential_decay', init=v, decay=.9, period=500, name='learning_rate') for v in [3.]]
 
 env.several_launches(evaluation,
                      kwargs_for_building,
                      build_hyperparameters={'init_parameter': [.01, .03, .1, .3, 1., 3.]},
+                     # build_hyperparameters={'init_parameter': [.3]},
                      other_hyperparameters={'learning_rate': list_of_lr},
                      batch_size=64,
+                     result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
+                     printed_result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
+                     #printed_result_types=None,
                      vocabulary=vocabulary,
-                     stop=100,
+                     stop=300,
                      num_unrollings=21,
                      train_dataset_text=train_text,
-                     printed_result_types=['loss', 'perplexity', 'accuracy'],
-                     results_collect_interval=None,
-                     no_validation=True,
+                     results_collect_interval=20,
+                     no_validation=False,
                      additional_feed_dict=None)
+
+# evaluation = dict(
+#     save_path='simple_fontain/tuning',
+#     result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
+#     datasets={'train': None,
+#               'default_1': [valid_text, 'default_1']},
+#     batch_gen_class=SimpleFontainBatcher,
+#     batch_kwargs={'vocabulary': vocabulary},
+#     batch_size=1,
+#     additional_feed_dict=None
+# )
+#
+# kwargs_for_building = dict(
+#           batch_size=2,
+#           vocabulary_size=vocabulary_size,
+#           attention_interval=2,
+#           attention_visibility=2,
+#           subsequence_length_in_intervals=2,
+#           characters_positions_in_vocabulary=cpiv)
+#
+# # list_of_lr = [
+# #     dict(type='exponential_decay', init=v, decay=.9, period=500, name='learning_rate') for v in [10., 5., 3., 1., .3]]
+# list_of_lr = [dict(type='exponential_decay', init=v, decay=.9, period=500, name='learning_rate') for v in [3.]]
+#
+# env.several_launches(evaluation,
+#                      kwargs_for_building,
+#                      #build_hyperparameters={'init_parameter': [.01, .03, .1, .3, 1., 3.]},
+#                      build_hyperparameters={'init_parameter': [.3]},
+#                      other_hyperparameters={'learning_rate': list_of_lr},
+#                      batch_size=2,
+#                      result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
+#                      vocabulary=vocabulary,
+#                      stop=300,
+#                      num_unrollings=4,
+#                      train_dataset_text=train_text,
+#                      printed_result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
+#                      results_collect_interval=30,
+#                      no_validation=True,
+#                      additional_feed_dict=None
+#                      #train_print_tensors=schedule
+#                      )

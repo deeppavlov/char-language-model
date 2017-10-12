@@ -123,13 +123,19 @@ def link_into_dictionary(old_dictionary, old_keys, new_key):
     return old_dictionary
 
 
-def paste_into_nested_dictionary(dictionary, searched_key, value_to_paste):
-    for key, value, in dictionary.items():
-        if key == searched_key:
-            dictionary[key] = construct(value_to_paste)
-        else:
-            if isinstance(value, dict):
-                paste_into_nested_dictionary(value, searched_key, value_to_paste)
+def paste_into_nested_structure(structure, searched_key, value_to_paste):
+    #print('***********************')
+    if isinstance(structure, dict):
+        for key, value, in structure.items():
+            #print('key:', key)
+            if key == searched_key:
+                structure[key] = construct(value_to_paste)
+            else:
+                if isinstance(value, (dict, list, tuple)):
+                    paste_into_nested_structure(value, searched_key, value_to_paste)
+    elif isinstance(structure, (list, tuple)):
+        for elem in structure:
+            paste_into_nested_structure(elem, searched_key, value_to_paste)
 
 
 def check_if_key_in_nested_dict(dictionary, keys):
@@ -718,6 +724,8 @@ class Handler(object):
     def _process_train_results(self,
                                step,
                                train_res):
+        # print('step:', step)
+        # print('train_res:', train_res)
         #print(self._last_run_tensor_order)
         basic_borders = self._last_run_tensor_order['basic']['borders']
         tmp = train_res[basic_borders[0]+1:basic_borders[1]]
@@ -1532,6 +1540,8 @@ class Environment(object):
                 for addition, add_controller in zip(train_feed_dict_additions, additional_controllers):
                     feed_dict[self._pupil_hooks[addition['name']]] = add_controller.get()
             train_operations = self._handler.get_tensors('train', step)
+            #print('train_operations:', train_operations)
+            #print('feed_dict:', feed_dict)
             train_res = self._session.run(train_operations, feed_dict=feed_dict)
             # here loss is given in bits per input (BPI)
 
@@ -1721,7 +1731,7 @@ class Environment(object):
             current_arguments = construct(old_arguments)
 
         for key, value in kwargs_to_parse.items():
-            paste_into_nested_dictionary(current_arguments, key, value)
+            paste_into_nested_structure(current_arguments, key, value)
 
         #print('current_arguments:\n', current_arguments)
         return current_arguments
@@ -1975,7 +1985,11 @@ class Environment(object):
             for base in output:
                 for idx, value in enumerate(values):
                     new_base = construct(base)
-                    paste_into_nested_dictionary(new_base[0], name, value)
+                    # print('in _form_list_of_kwargs:')
+                    # print('value:', value)
+                    paste_into_nested_structure(new_base[0], name, value)
+                    print("new_base[0]['run'][0]['train_specs']['learning_rate']:",
+                          new_base[0]['run'][0]['train_specs']['learning_rate'])
                     new_base[1][name] = value
                     new_base[2].append(idx)
                     new_output.append(new_base)
@@ -2006,8 +2020,9 @@ class Environment(object):
         list_of_build_kwargs, list_of_build_hp_values, _ = zip(*list_of_build_kwargs)
         base = tmp_output
         del base['session_specs']
-
         args_for_launches = self._form_list_of_kwargs(base, other_hyperparameters)
+        print("args_for_launches[0][0]['run'][0]['train_specs']['learning_rate']:",
+              args_for_launches[0][0]['run'][0]['train_specs']['learning_rate'])
 
         args_for_launches, hp_values_list, _ = zip(*args_for_launches)
 
