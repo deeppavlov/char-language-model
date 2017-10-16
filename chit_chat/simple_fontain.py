@@ -3,7 +3,7 @@ import math
 import re
 import tensorflow as tf
 from model import Model
-from some_useful_functions import create_vocabulary, char2id, get_positions_in_vocabulary, construct
+from some_useful_functions import create_vocabulary, char2id, get_positions_in_vocabulary, construct, flatten
 
 
 def char2vec(characters_positions_in_vocabulary,
@@ -174,16 +174,6 @@ class SimpleFontainBatcher(object):
             labels.append(tmp_labels)
         self._last_inputs = inputs[-1]
         return np.stack(inputs[:-1]), np.concatenate(labels, 0)
-
-
-def flatten(nested):
-    if not isinstance(nested, (tuple, list)):
-        return [nested]
-    output = list()
-    for inner_object in nested:
-        flattened = flatten(inner_object)
-        output.extend(flattened)
-    return output
 
 
 class SimpleFontain(Model):
@@ -633,7 +623,8 @@ class SimpleFontain(Model):
                 self.loss = tf.cond(there_is_bot_answers,
                                     true_fn=lambda: normal_loss,
                                     false_fn=lambda: 0.)
-            optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
+            #optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
+            optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
             gradients, v = zip(*optimizer.compute_gradients(self.loss + l2_loss / l2_divider))
             gradients, _ = tf.clip_by_global_norm(gradients, 1.)
             # print('Names of gradients:')

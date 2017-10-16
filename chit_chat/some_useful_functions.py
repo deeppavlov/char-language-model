@@ -1,5 +1,6 @@
 import numpy as np
 import inspect
+import os
 
 
 def create_vocabulary(text):
@@ -23,6 +24,15 @@ def char2id(char, characters_positions_in_vocabulary):
     else:
         print(u'Unexpected character: %s\nUnexpected character number: %s\n' % (char, ord(char)))
         return None
+
+
+def id2char(dictid, vocabulary):
+    voc_size = len(vocabulary)
+    if (dictid >= 0) and (dictid < voc_size):
+        return vocabulary[dictid]
+    else:
+        print(u"unexpected id")
+        return u'\0'
 
 
 def filter_text(text, allowed_letters):
@@ -58,6 +68,29 @@ def load_vocabulary_from_file(vocabulary_file_name):
     return list(vocabulary_string)
 
 
+def check_not_one_byte(text):
+    not_one_byte_counter = 0
+    max_character_order_index = 0
+    min_character_order_index = 2 ** 16
+    present_characters = [0] * 256
+    number_of_characters = 0
+    for char in text:
+        if ord(char) > 255:
+            not_one_byte_counter += 1
+        if len(present_characters) <= ord(char):
+            present_characters.extend([0] * (ord(char) - len(present_characters) + 1))
+            present_characters[ord(char)] = 1
+            number_of_characters += 1
+        elif present_characters[ord(char)] == 0:
+            present_characters[ord(char)] = 1
+            number_of_characters += 1
+        if ord(char) > max_character_order_index:
+            max_character_order_index = ord(char)
+        if ord(char) < min_character_order_index:
+            min_character_order_index = ord(char)
+    return not_one_byte_counter, min_character_order_index, max_character_order_index, number_of_characters, present_characters
+
+
 def construct(obj):
     """Used for preventing of not expected changing of class attributes"""
     if isinstance(obj, dict):
@@ -80,3 +113,48 @@ def construct(obj):
     else:
         raise TypeError("Object of unsupported type was passed to construct function: %s" % type(obj))
     return new_obj
+
+
+def maybe_download(filename, expected_bytes):
+    # Download a file if not present, and make sure it's the right size.
+    if not os.path.exists(filename):
+        filename, _ = urlretrieve(url + filename, filename)
+    statinfo = os.stat(filename)
+    if statinfo.st_size == expected_bytes:
+        print('Found and verified %s' % filename)
+    else:
+        print(statinfo.st_size)
+        raise Exception(
+            'Failed to verify ' + filename + '. Can you get to it with a browser?')
+    return filename
+
+
+def read_data(filename):
+    if not os.path.exists('enwik8'):
+        f = zipfile.ZipFile(filename)
+        for name in f.namelist():
+            full_text = tf.compat.as_str(f.read(name))
+        f.close()
+        """f = open('enwik8', 'w')
+        f.write(text.encode('utf8'))
+        f.close()"""
+    else:
+        f = open('enwik8', 'r')
+        full_text = f.read().decode('utf8')
+        f.close()
+    return full_text
+
+    f = codecs.open('enwik8', encoding='utf-8')
+    text = f.read()
+    f.close()
+    return text
+
+
+def flatten(nested):
+    if not isinstance(nested, (tuple, list)):
+        return [nested]
+    output = list()
+    for inner_object in nested:
+        flattened = flatten(inner_object)
+        output.extend(flattened)
+    return output

@@ -1,129 +1,13 @@
-# These are all the modules we'll be using later. Make sure you can import them
-# before proceeding further.
 from __future__ import print_function
 import numpy as np
-import random
-import string
 import tensorflow as tf
-import tensorflow.python.ops.rnn_cell
 import zipfile
-#from six.moves import range
-#from six.moves.urllib.request import urlretrieve
-import collections
-import matplotlib
-import matplotlib.pyplot as plt
 import codecs
-import time
 import os
-import gc
-#from six.moves import cPickle as pickle
-from tensorflow.python import debug as tf_debug
+from some_useful_functions import construct, create_vocabulary, get_positions_in_vocabulary, char2vec, char2id, id2char
+
 
 url = 'http://mattmahoney.net/dc/'
-
-def maybe_download(filename, expected_bytes):
-    # Download a file if not present, and make sure it's the right size.
-    if not os.path.exists(filename):
-        filename, _ = urlretrieve(url + filename, filename)
-    statinfo = os.stat(filename)
-    if statinfo.st_size == expected_bytes:
-        print('Found and verified %s' % filename)
-    else:
-        print(statinfo.st_size)
-        raise Exception(
-            'Failed to verify ' + filename + '. Can you get to it with a browser?')
-    return filename
-
-
-def read_data(filename):
-    if not os.path.exists('enwik8'):
-        f = zipfile.ZipFile(filename)
-        for name in f.namelist():
-            full_text = tf.compat.as_str(f.read(name))
-        f.close()
-        """f = open('enwik8', 'w')
-        f.write(text.encode('utf8'))
-        f.close()"""
-    else:
-        f = open('enwik8', 'r')
-        full_text = f.read().decode('utf8')
-        f.close()
-    return full_text
-
-    f = codecs.open('enwik8', encoding='utf-8')
-    text = f.read()
-    f.close()
-    return text
-
-
-def check_not_one_byte(text):
-    not_one_byte_counter = 0
-    max_character_order_index = 0
-    min_character_order_index = 2 ** 16
-    present_characters = [0] * 256
-    number_of_characters = 0
-    for char in text:
-        if ord(char) > 255:
-            not_one_byte_counter += 1
-        if len(present_characters) <= ord(char):
-            present_characters.extend([0] * (ord(char) - len(present_characters) + 1))
-            present_characters[ord(char)] = 1
-            number_of_characters += 1
-        elif present_characters[ord(char)] == 0:
-            present_characters[ord(char)] = 1
-            number_of_characters += 1
-        if ord(char) > max_character_order_index:
-            max_character_order_index = ord(char)
-        if ord(char) < min_character_order_index:
-            min_character_order_index = ord(char)
-    return not_one_byte_counter, min_character_order_index, max_character_order_index, number_of_characters, present_characters
-
-
-def create_vocabulary(text):
-    all_characters = list()
-    for char in text:
-        if char not in all_characters:
-            all_characters.append(char)
-    return sorted(all_characters, key=lambda dot: ord(dot))
-
-
-def get_positions_in_vocabulary(vocabulary):
-    characters_positions_in_vocabulary = dict()
-    for idx, char in enumerate(vocabulary):
-        characters_positions_in_vocabulary[char] = idx
-    return characters_positions_in_vocabulary
-
-
-def filter_text(text, allowed_letters):
-    new_text = ""
-    for char in text:
-        if char in allowed_letters:
-            new_text += char
-    return new_text
-
-
-def char2id(char, characters_positions_in_vocabulary):
-    if char in characters_positions_in_vocabulary:
-        return characters_positions_in_vocabulary[char]
-    else:
-        print(u'Unexpected character: %s\nUnexpected character number: %s\n' % (char, ord(char)))
-        return None
-
-
-def char2vec(char, characters_positions_in_vocabulary):
-    voc_size = len(characters_positions_in_vocabulary)
-    vec = np.zeros(shape=(1, voc_size), dtype=np.float)
-    vec[0, char2id(char, characters_positions_in_vocabulary)] = 1.0
-    return vec
-
-
-def id2char(dictid, vocabulary):
-    voc_size = len(vocabulary)
-    if (dictid >= 0) and (dictid < voc_size):
-        return vocabulary[dictid]
-    else:
-        print(u"unexpected id")
-        return u'\0'
 
 
 class BatchGenerator(object):
@@ -232,6 +116,30 @@ class Vanilla(Model):
         X = tf.concat([inp, hidden_state], 1)
         output = tf.tanh(tf.matmul(X, self._weights) + self._bias)
         return output, output
+
+    @staticmethod
+    def form_list_of_kwargs(kwargs_for_building, build_hyperparameters):
+        output = [(construct(kwargs_for_building), dict(), list())]
+        lengths = list()
+        for name, values in build_hyperparameters.items():
+            new_output = list()
+            lengths.append(len(values))
+            for base in output:
+                for idx, value in enumerate(values):
+                    new_base = construct(base)
+                    new_base[0][name] = value
+                    new_base[1][name] = value
+                    new_base[2].append(idx)
+                    new_output.append(new_base)
+            output = new_output
+        sorting_factors = [1]
+        for length in reversed(lengths[1:]):
+            sorting_factors.append(sorting_factors[-1] * length)
+        output = sorted(output,
+                        key=lambda set: sum(
+                            [point_idx*sorting_factor \
+                             for point_idx, sorting_factor in zip(reversed(set[2][1:]), sorting_factors)]))
+        return output
 
     def __init__(self,
                  batch_size=64,

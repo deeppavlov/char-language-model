@@ -269,6 +269,9 @@ class Handler(object):
                  result_types,
                  summary=False,
                  add_graph_to_summary=False,
+                 save_to_file=None,
+                 save_to_storage=None,
+                 print_results=None,
                  eval_dataset_names=None,
                  hyperparameters=None):
         continuous_chit_chat = ['simple_fontain']
@@ -279,6 +282,9 @@ class Handler(object):
         self._bpc = 'bpc' in self._result_types
         self._hooks = hooks
         self._last_run_tensor_order = dict()
+        self._save_to_file = save_to_file
+        self._save_to_storage = save_to_storage
+        self._print_results = print_results
         if self._save_path is not None:
             create_path(self._save_path)
         if self._processing_type == 'train':
@@ -368,30 +374,33 @@ class Handler(object):
         if train_dataset_name is not None:
             self._train_dataset_name = train_dataset_name
         if validation_dataset_names is not None:
+            print('validation_dataset_names:', validation_dataset_names)
+            print('env._storage:', self._environment_instance._storage)
             for dataset_name in validation_dataset_names:
                 if dataset_name not in self._dataset_specific.keys():
                     new_files = dict()
-                    new_files['loss'] = open(self._save_path +
-                                             '/' +
-                                             'loss_validation_%s.txt' % dataset_name,
-                                             'a')
-                    new_files['perplexity'] = open(self._save_path +
-                                                   '/' +
-                                                   'perplexity_validation_%s.txt' % dataset_name,
-                                                   'a')
-                    new_files['accuracy'] = open(self._save_path +
+                    if self._save_path is not None:
+                        new_files['loss'] = open(self._save_path +
                                                  '/' +
-                                                 'accuracy_validation_%s.txt' % dataset_name,
+                                                 'loss_validation_%s.txt' % dataset_name,
                                                  'a')
-                    if self._bpc:
-                        new_files['bpc'] = open(self._save_path +
-                                                '/' +
-                                                'bpc_validation_%s.txt' % dataset_name,
-                                                'a')
-                    new_files['pickle_tensors'] = open(self._save_path +
+                        new_files['perplexity'] = open(self._save_path +
                                                        '/' +
-                                                       'tensors_validation_%s.pickle' % dataset_name,
-                                                       'ab')
+                                                       'perplexity_validation_%s.txt' % dataset_name,
+                                                       'a')
+                        new_files['accuracy'] = open(self._save_path +
+                                                     '/' +
+                                                     'accuracy_validation_%s.txt' % dataset_name,
+                                                     'a')
+                        if self._bpc:
+                            new_files['bpc'] = open(self._save_path +
+                                                    '/' +
+                                                    'bpc_validation_%s.txt' % dataset_name,
+                                                    'a')
+                        new_files['pickle_tensors'] = open(self._save_path +
+                                                           '/' +
+                                                           'tensors_validation_%s.pickle' % dataset_name,
+                                                           'ab')
 
                     self._dataset_specific[dataset_name] = {'name': dataset_name,
                                                             'files': new_files}
@@ -399,6 +408,7 @@ class Handler(object):
                     for key in self._result_types:
                         if not self._environment_instance.check_if_key_in_storage([dataset_name, key]):
                             init_dict[key] = list()
+                    print('dataset_name:', dataset_name)
                     self._environment_instance.init_storage(dataset_name, **init_dict)
             for key in self._dataset_specific.keys():
                 if key not in validation_dataset_names:
@@ -408,12 +418,25 @@ class Handler(object):
 
     def set_new_run_schedule(self, schedule, train_dataset_name, validation_dataset_names):
         self._results_collect_interval = schedule['to_be_collected_while_training']['results_collect_interval']
+        if self._results_collect_interval is not None:
+            if self._result_types is not None:
+                self._save_to_file = True
+                self._save_to_storage = True
+            else:
+                self._save_to_file = False
+                self._save_to_storage = False
+        else:
+            self._save_to_file = False
+            self._save_to_storage = False
         self._print_per_collected = schedule['to_be_collected_while_training']['print_per_collected']
         self._example_per_print = schedule['to_be_collected_while_training']['example_per_print']
         self._train_tensor_schedule = schedule['train_tensor_schedule']
         self._validation_tensor_schedule = schedule['validation_tensor_schedule']
         self._printed_controllers = schedule['printed_controllers']
         self._printed_result_types = schedule['printed_result_types']
+        if self._printed_result_types is not None:
+            if len(self._printed_result_types) > 0:
+                self._print_results = True
         self._switch_datasets(train_dataset_name, validation_dataset_names)
 
     def set_test_specs(self, validation_dataset_names=None, fuses=None, replicas=None, random=None):
@@ -429,10 +452,24 @@ class Handler(object):
         for res_type in self._accumulated.keys():
             self._accumulated[res_type] = list()
 
+    @staticmethod
+    def decide(higher_bool, lower_bool):
+        if higher_bool is None:
+            if lower_bool is None:
+                answer = False
+            else:
+                answer = lower_bool
+        else:
+            answer = higher_bool
+        return answer
+
     def stop_accumulation(self,
                           save_to_file=True,
                           save_to_storage=True,
                           print_results=True):
+        save_to_file = self.decide(save_to_file, self._save_to_file)
+        save_to_storage = self.decide(save_to_storage, self._save_to_storage)
+        print_results = self.decide(print_results, self._print_results)
         means = dict()
         for key, value_list in self._accumulated.items():
             #print('%s:' % key, value_list)
@@ -446,12 +483,13 @@ class Handler(object):
                 mean = 0.
             else:
                 mean = mean / counter
-            if save_to_file:
-                file_d = self._dataset_specific[self._name_of_dataset_on_which_accumulating]['files'][key]
-                if self._training_step is not None:
-                    file_d.write('%s %s\n' % (self._training_step, mean))
-                else:
-                    file_d.write('%s\n' % (sum(value_list) / len(value_list)))
+            if self._save_path is not None:
+                if save_to_file:
+                    file_d = self._dataset_specific[self._name_of_dataset_on_which_accumulating]['files'][key]
+                    if self._training_step is not None:
+                        file_d.write('%s %s\n' % (self._training_step, mean))
+                    else:
+                        file_d.write('%s\n' % (sum(value_list) / len(value_list)))
             means[key] = mean
         if save_to_storage:
             self._environment_instance.append_to_storage(self._name_of_dataset_on_which_accumulating,
@@ -659,6 +697,7 @@ class Handler(object):
                 #             print(c.name)
                 #         else:
                 #             print(c)
+                print('controller._specifications:', controller._specifications)
                 if controller.name in self._printed_controllers:
                     print('%s:' % controller.name, controller.get())
 
@@ -1264,6 +1303,9 @@ class Environment(object):
         for key, value in kwargs.items():
             d[key].append(value)
 
+    def flush_storage(self):
+        self._storage = {'step': None}
+
     def set_in_storage(self, **kwargs):
         for key, value in kwargs.items():
             self._storage[key] = value
@@ -1314,9 +1356,9 @@ class Environment(object):
                   valid_batch_kwargs,
                   training_step=None,
                   additional_feed_dict=None,
-                  save_to_file=True,
-                  save_to_storage=True,
-                  print_results=True):
+                  save_to_file=None,
+                  save_to_storage=None,
+                  print_results=None):
         if 'reset_validation_state' in self._pupil_hooks:
             self._session.run(self._pupil_hooks['reset_validation_state'])
         #print('batch_generator_class:', batch_generator_class)
@@ -1445,7 +1487,7 @@ class Environment(object):
         collect_interval = to_be_collected_while_training['results_collect_interval']
         print_per_collected = to_be_collected_while_training['print_per_collected']
 
-        if train_specs['no_validation'] or collect_interval is False:
+        if train_specs['no_validation'] or collect_interval is None:
             it_is_time_for_validation = Controller(self._storage,
                                                    {'type': 'always_false'})
         else:
@@ -1570,36 +1612,42 @@ class Environment(object):
             if 'name' not in controller_specs:
                 controller_specs['name'] = name
 
+    def _process_abbreviation_in_1_entry(self, key, value):
+        new_value = construct(value)
+        if key == 'stop':
+            if isinstance(value, int):
+                new_value = {'type': 'limit_steps', 'limit': value}
+            self._set_controller_name_in_specs(new_value, 'stop')
+        if key == 'batch_size':
+            if isinstance(value, int):
+                new_value = {'type': 'fixed', 'value': value}
+            self._set_controller_name_in_specs(new_value, 'batch_size')
+        if key == 'num_unrollings':
+            if isinstance(value, int):
+                new_value = {'type': 'fixed', 'value': value}
+            self._set_controller_name_in_specs(new_value, 'num_unrollings')
+        if key == 'checkpoint_steps':
+            if isinstance(value, list):
+                new_value = {'type': 'true_on_steps', 'steps': value}
+            elif isinstance(value, int):
+                new_value = {'type': 'true_on_steps', 'steps': [value]}
+            else:
+                new_value = {'type': 'always_false'}
+            self._set_controller_name_in_specs(new_value, 'checkpoint_steps')
+        if key == 'learning_rate':
+            self._set_controller_name_in_specs(new_value, 'learning_rate')
+        if key == 'debug':
+            if isinstance(value, int):
+                new_value = {'type': 'true_on_steps', 'steps': [value]}
+            else:
+                new_value = None
+            self._set_controller_name_in_specs(new_value, 'debug')
+        return new_value
+
     def _process_abbreviations(self, set_of_kwargs):
         for key, value in set_of_kwargs.items():
-            if key == 'stop':
-                if isinstance(value, int):
-                    set_of_kwargs[key] = {'type': 'limit_steps', 'limit': value}
-                self._set_controller_name_in_specs(set_of_kwargs[key], 'stop')
-            if key == 'batch_size':
-                if isinstance(value, int):
-                    set_of_kwargs[key] = {'type': 'fixed', 'value': value}
-                self._set_controller_name_in_specs(set_of_kwargs[key], 'batch_size')
-            if key == 'num_unrollings':
-                if isinstance(value, int):
-                    set_of_kwargs[key] = {'type': 'fixed', 'value': value}
-                self._set_controller_name_in_specs(set_of_kwargs[key], 'num_unrollings')
-            if key == 'checkpoint_steps':
-                if isinstance(value, list):
-                    set_of_kwargs[key] = {'type': 'true_on_steps', 'steps': value}
-                elif isinstance(value, int):
-                    set_of_kwargs[key] = {'type': 'true_on_steps', 'steps': [value]}
-                else:
-                    set_of_kwargs[key] = {'type': 'always_false'}
-                self._set_controller_name_in_specs(set_of_kwargs[key], 'checkpoint_steps')
-            if key == 'learning_rate':
-                self._set_controller_name_in_specs(set_of_kwargs[key], 'learning_rate')
-            if key == 'debug':
-                if isinstance(value, int):
-                    set_of_kwargs[key] = {'type': 'true_on_steps', 'steps': [value]}
-                else:
-                    set_of_kwargs[key] = None
-                self._set_controller_name_in_specs(set_of_kwargs[key], 'debug')
+            value = self._process_abbreviation_in_1_entry(key, value)
+            set_of_kwargs[key] = value
         if search_in_nested_dictionary(set_of_kwargs, 'summary') is None:
             add_graph_to_summary = search_in_nested_dictionary(set_of_kwargs, 'add_graph_to_summary')
             train_summary_tensors = search_in_nested_dictionary(set_of_kwargs, 'train_summary_tensors')
@@ -1616,6 +1664,15 @@ class Environment(object):
                 set_of_kwargs['summary'] = False
         self._process_datasets_shortcuts(set_of_kwargs)
         self._process_batch_kwargs_shortcuts(set_of_kwargs)
+
+    def _process_abbreviations_in_hyperparameters_set(self, set):
+        for key, values in set.items():
+            new_values = list()
+            for value in values:
+                new_value = self._process_abbreviation_in_1_entry(key, value)
+                new_values.append(new_value)
+            set[key] = new_values
+        return set
 
     def _process_batch_kwargs_shortcuts(self, set_of_kwargs):
         if 'train_batch_kwargs' not in set_of_kwargs:
@@ -1898,6 +1955,7 @@ class Environment(object):
 
     def _train_repeatedly(self, start_specs, run_specs_set):
         # initializing model
+        self.flush_storage()
         if start_specs['restore_path'] is not None:
             self._hooks['saver'].restore(self._session, start_specs['restore_path'])
         else:
@@ -2007,13 +2065,17 @@ class Environment(object):
                          evaluation,
                          kwargs_for_building,
                          args_for_launches=None,
-                         build_hyperparameters=None,
-                         other_hyperparameters=None,
+                         build_hyperparameters=dict(),
+                         other_hyperparameters=dict(),
                          **kwargs):
         tmp_output = self._parse_train_method_arguments([],
                                                         kwargs,
                                                         set_passed_parameters_as_default=False)
         session_specs = tmp_output['session_specs']
+        build_hyperparameters = self._process_abbreviations_in_hyperparameters_set(construct(build_hyperparameters))
+        other_hyperparameters = self._process_abbreviations_in_hyperparameters_set(construct(other_hyperparameters))
+        print('build_hyperparameters:', build_hyperparameters)
+        print('other_hyperparameters:', other_hyperparameters)
         list_of_build_kwargs = self._pupil_class.form_list_of_kwargs(kwargs_for_building,
                                                                      build_hyperparameters)
 

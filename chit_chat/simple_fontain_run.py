@@ -216,6 +216,7 @@ env.several_launches(evaluation,
                      stop=300,
                      num_unrollings=21,
                      train_dataset_text=train_text,
+                     validation_dataset_texts=[valid_text],
                      results_collect_interval=20,
                      no_validation=False,
                      additional_feed_dict=None)
