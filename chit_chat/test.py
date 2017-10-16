@@ -70,7 +70,7 @@ kwargs_for_building = dict(
           num_layers=2,
           num_nodes=[300, 300],
           vocabulary_size=vocabulary_size,
-          num_unrollings=10)
+          num_unrollings=30)
 
 #list_of_lr = [dict(type='exponential_decay', init=v, decay=.9, period=500) for v in [10., 5., 3., 1., .3]]
 list_of_lr = [dict(type='exponential_decay', init=v, decay=.9, period=500) for v in [15., 10., 5., 2., 1.]]
