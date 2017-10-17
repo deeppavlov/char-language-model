@@ -4,169 +4,9 @@ import numpy as np
 import multiprocessing as mp
 import tensorflow as tf
 from tensorflow.python import debug as tf_debug
-from some_useful_functions import construct
-
-
-def compute_perplexity(probabilities):
-    probabilities[probabilities < 1e-10] = 1e-10
-    log_probs = np.log2(probabilities)
-    entropy_by_character = np.sum(- probabilities * log_probs, axis=1)
-    return np.mean(np.exp2(entropy_by_character))
-
-
-def compute_loss(predictions, labels):
-    predictions[predictions < 1e-10] = 1e-10
-    log_predictions = np.log(predictions)
-    bpc_by_character = np.sum(- labels * log_predictions, axis=1)
-    return np.mean(bpc_by_character)
-
-
-def compute_bpc(predictions, labels):
-    return compute_loss(predictions, labels) / np.log(2)
-
-
-def compute_accuracy(predictions, labels):
-    num_characters = predictions.shape[0]
-    num_correct = 0
-    for i in range(num_characters):
-        if labels[i, np.argmax(predictions, axis=1)[i]] == 1:
-            num_correct += 1
-    return float(num_correct) / num_characters
-
-
-def split_to_path_name(path):
-    parts = path.split('/')
-    name = parts[-1]
-    path = '/'.join(parts[:-1])
-    return path, name
-
-
-def create_path(path):
-    folder_list = path.split('/')
-    if len(folder_list) > 0:
-        current_folder = folder_list[0]
-        for idx, folder in enumerate(folder_list):
-            if idx > 0:
-                current_folder += ('/' + folder)
-            if not os.path.exists(current_folder):
-                os.mkdir(current_folder)
-
-
-def loop_through_indices(filename, start_index):
-    path, name = split_to_path_name(filename)
-    if '.' in name:
-        inter_list = name.split('.')
-        extension = inter_list[-1]
-        base = '.'.join(inter_list[:-1])
-        base += '#%s'
-        name = '.'.join([base, extension])
-
-    else:
-        name += '#%s'
-    if path != '':
-        base_path = '/'.join([path, name])
-    else:
-        base_path = name
-    index = start_index
-    while os.path.exists(base_path % index):
-        index += 1
-    return base_path % index
-
-
-def add_index_to_filename_if_needed(filename, index=None):
-    if index is not None:
-        return loop_through_indices(filename, index)
-    if os.path.exists(filename):
-        return loop_through_indices(filename, 1)
-    return filename
-
-
-def match_two_dicts(small_dict, big_dict):
-    """Compares keys of small_dict to keys of big_dict and if in small_dict there is a key missing in big_dict throws
-    an error"""
-    big_dict_keys = big_dict.keys()
-    for key in small_dict.keys():
-        if key not in big_dict_keys:
-            raise KeyError("Wrong argument name '%s'" % key)
-    return True
-
-
-def split_dictionary(dict_to_split, bases):
-    """Function takes dictionary dict_to_split and splits it into several dictionaries according to keys of dicts
-    from bases"""
-    dicts = list()
-    for base in bases:
-        if isinstance(base, dict):
-            base_keys = base.keys()
-        else:
-            base_keys = base
-        new_dict = dict()
-        for key, value in dict_to_split.items():
-            if key in base_keys:
-                new_dict[key] = value
-        dicts.append(new_dict)
-    return dicts
-
-
-def link_into_dictionary(old_dictionary, old_keys, new_key):
-    """Used in _parse_train_method_arguments to united several kwargs into one dictionary
-    Args:
-        old_dictionary: a dictionary which entries are to be united
-        old_keys: list of keys to be united
-        new_key: the key of new entry  containing linked dictionary"""
-    linked = dict()
-    for old_key in old_keys:
-        if old_key in linked:
-            linked[old_key] = old_dictionary[old_key]
-            del old_dictionary[old_key]
-    old_dictionary[new_key] = linked
-    return old_dictionary
-
-
-def paste_into_nested_structure(structure, searched_key, value_to_paste):
-    #print('***********************')
-    if isinstance(structure, dict):
-        for key, value, in structure.items():
-            #print('key:', key)
-            if key == searched_key:
-                structure[key] = construct(value_to_paste)
-            else:
-                if isinstance(value, (dict, list, tuple)):
-                    paste_into_nested_structure(value, searched_key, value_to_paste)
-    elif isinstance(structure, (list, tuple)):
-        for elem in structure:
-            paste_into_nested_structure(elem, searched_key, value_to_paste)
-
-
-def check_if_key_in_nested_dict(dictionary, keys):
-    new_key_list = keys[1:]
-    if keys[0] not in dictionary:
-        return False
-    if len(new_key_list) == 0:
-        return True
-    value = dictionary[keys[0]]
-    if not isinstance(value, dict):
-        return False
-    return check_if_key_in_nested_dict(value, new_key_list)
-
-
-def search_in_nested_dictionary(dictionary, searched_key):
-    for key, value in dictionary.items():
-        if key == searched_key:
-            return value
-        else:
-            if isinstance(value, dict):
-                returned_value = search_in_nested_dictionary(value, searched_key)
-                if returned_value is not None:
-                    return returned_value
-    return None
-
-
-def add_missing_to_list(extended_list, added_list):
-    for elem in added_list:
-        if elem not in extended_list:
-            extended_list.append(elem)
-    return extended_list
+from some_useful_functions import (construct, add_index_to_filename_if_needed, match_two_dicts, create_path,
+                                   paste_into_nested_structure, check_if_key_in_nested_dict,
+                                   search_in_nested_dictionary, add_missing_to_list, print_and_log)
 
 
 class Controller(object):
@@ -374,8 +214,8 @@ class Handler(object):
         if train_dataset_name is not None:
             self._train_dataset_name = train_dataset_name
         if validation_dataset_names is not None:
-            print('validation_dataset_names:', validation_dataset_names)
-            print('env._storage:', self._environment_instance._storage)
+            #print('validation_dataset_names:', validation_dataset_names)
+            #print('env._storage:', self._environment_instance._storage)
             for dataset_name in validation_dataset_names:
                 if dataset_name not in self._dataset_specific.keys():
                     new_files = dict()
@@ -408,7 +248,7 @@ class Handler(object):
                     for key in self._result_types:
                         if not self._environment_instance.check_if_key_in_storage([dataset_name, key]):
                             init_dict[key] = list()
-                    print('dataset_name:', dataset_name)
+                    #print('dataset_name:', dataset_name)
                     self._environment_instance.init_storage(dataset_name, **init_dict)
             for key in self._dataset_specific.keys():
                 if key not in validation_dataset_names:
@@ -697,7 +537,7 @@ class Handler(object):
                 #             print(c.name)
                 #         else:
                 #             print(c)
-                print('controller._specifications:', controller._specifications)
+                #print('controller._specifications:', controller._specifications)
                 if controller.name in self._printed_controllers:
                     print('%s:' % controller.name, controller.get())
 
@@ -1218,8 +1058,8 @@ class Environment(object):
             else:
                 actual_names.append(builder_name)
         loss_builder_names, not_loss_builder_names = self._split_to_loss_and_not_loss_names(actual_names)
-        print('loss_builder_names:', loss_builder_names)
-        print('not_loss_builder_names:', not_loss_builder_names)
+        #print('loss_builder_names:', loss_builder_names)
+        #print('not_loss_builder_names:', not_loss_builder_names)
         for builder_name in loss_builder_names:
             self._add_hook(builder_name, model_type=model_type)
         for builder_name in not_loss_builder_names:
@@ -1315,6 +1155,7 @@ class Environment(object):
 
     def _create_checkpoint(self, step, checkpoints_path, model_type='pupil'):
         path = checkpoints_path + '/' + str(step)
+        print('\nCreating checkpoint at %s' % path)
         if model_type == 'pupil':
             self._pupil_hooks['saver'].save(self._session, path)
         elif model_type == 'assistant':
@@ -2074,8 +1915,8 @@ class Environment(object):
         session_specs = tmp_output['session_specs']
         build_hyperparameters = self._process_abbreviations_in_hyperparameters_set(construct(build_hyperparameters))
         other_hyperparameters = self._process_abbreviations_in_hyperparameters_set(construct(other_hyperparameters))
-        print('build_hyperparameters:', build_hyperparameters)
-        print('other_hyperparameters:', other_hyperparameters)
+        #print('build_hyperparameters:', build_hyperparameters)
+        #print('other_hyperparameters:', other_hyperparameters)
         list_of_build_kwargs = self._pupil_class.form_list_of_kwargs(kwargs_for_building,
                                                                      build_hyperparameters)
 
@@ -2116,3 +1957,65 @@ class Environment(object):
                 self._handler.process_results(hp, res)
             p.join()
 
+    def inference(self,
+                  restore_path,
+                  log_path,
+                  vocabulary,
+                  characters_positions_in_vocabulary,
+                  char2vec,
+                  vec2char,
+                  pred2vec,
+                  gpu_memory=None,
+                  appending=True,
+                  first_speaker='human'):
+        create_path(log_path, file_name_is_in_path=True)
+        if not appending:
+            log_path = add_index_to_filename_if_needed(log_path)
+        if appending:
+            fd = open(log_path, 'a', encoding='utf-8')
+        else:
+            fd = open(log_path, 'w', encoding='utf-8')
+        config = tf.ConfigProto(allow_soft_placement=True,
+                                log_device_placement=False)
+        if gpu_memory is not None:
+            config.gpu_options.per_process_gpu_memory_fraction = gpu_memory
+
+        with tf.Session(config=config) as session:
+            if restore_path is None:
+                print_and_log('Skipping variables restoring. Continueing on current variables values', fd=fd)
+            else:
+                print('restoring from %s' % restore_path)
+                self._pupil_hooks['saver'].restore(session, restore_path)
+            self._pupil_hooks['reset_validation_state'].run()
+            if first_speaker == 'human':
+                human_replica = input('Human: ')
+            else:
+                human_replica = ''
+            sample_prediction = self._pupil_hooks['validation_predictions']
+            sample_input = self._pupil_hooks['validation_inputs']
+            while not human_replica == 'FINISH':
+                if human_replica != '':
+                    print_and_log('Human: ' + human_replica, _print=False, fd=fd)
+                    for char in human_replica:
+                        feed = char2vec(char, characters_positions_in_vocabulary)
+                        #print('feed.shape:', feed.shape)
+                        _ = sample_prediction.eval({sample_input: feed})
+                feed = char2vec('\n', characters_positions_in_vocabulary)
+                prediction = sample_prediction.eval({sample_input: feed})
+                counter = 0
+                char = None
+                bot_replica = ""
+                while char != '\n' and counter < 500:
+                    feed = pred2vec(prediction)
+                    prediction = sample_prediction.eval({sample_input: feed})
+                    char = vec2char(np.reshape(feed, (1, -1)), vocabulary)[0]
+                    if char != '\n':
+                        bot_replica += char
+                    counter += 1
+                print_and_log('Bot: ' + bot_replica, fd=fd)
+                feed = char2vec('\n', characters_positions_in_vocabulary)
+                _ = sample_prediction.eval({sample_input: feed})
+
+                human_replica = input('Human: ')
+            fd.write('\n*********************')
+            fd.close()

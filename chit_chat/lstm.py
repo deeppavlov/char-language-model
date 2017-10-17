@@ -5,11 +5,18 @@ import zipfile
 import codecs
 import os
 from some_useful_functions import (construct, create_vocabulary,
-                                   get_positions_in_vocabulary, char2vec,
+                                   get_positions_in_vocabulary, char2vec, pred2vec,
                                    char2id, id2char, flatten)
 
 
 url = 'http://mattmahoney.net/dc/'
+
+def char2batchvec(char, characters_positions_in_vocabulary):
+    return np.reshape(char2vec(char, characters_positions_in_vocabulary), (1, 1, -1))
+
+
+def pred2batchvec(pred):
+    return np.reshape(pred2vec(pred), (1, 1, -1))
 
 
 class LstmBatchGenerator(object):
@@ -184,7 +191,7 @@ class Lstm(Model):
             rnn_outputs = tf.concat(rnn_outputs, 0, name='concatenated_rnn_outputs')
             hs = rnn_outputs
             for layer_idx in range(self._num_output_layers):
-                print('hs.shape:', hs.get_shape().as_list())
+                #print('hs.shape:', hs.get_shape().as_list())
                 hs = tf.add(
                     tf.matmul(hs,
                               self._output_matrices[layer_idx],
@@ -237,7 +244,7 @@ class Lstm(Model):
 
     def _compute_output_matrix_parameters(self, idx):
         if idx == 0:
-            print('self._num_nodes:', self._num_nodes)
+            #print('self._num_nodes:', self._num_nodes)
             input_dim = self._num_nodes[-1]
         else:
             input_dim = self._num_output_nodes[idx-1]
@@ -345,7 +352,9 @@ class Lstm(Model):
                 self.train_op = optimizer.apply_gradients(zip(gradients, v))
                 self.predictions = tf.nn.softmax(logits)
         with tf.name_scope('validation'):
-            self.sample_input = tf.placeholder(tf.float32, shape=[1, 1, self._vocabulary_size])
+            self.sample_input = tf.placeholder(tf.float32,
+                                               shape=[1, 1, self._vocabulary_size],
+                                               name='sample_input')
             sample_input = tf.reshape(self.sample_input, [1, -1])
             saved_sample_state = list()
             for layer_idx, layer_num_nodes in enumerate(self._num_nodes):
@@ -363,7 +372,7 @@ class Lstm(Model):
             self.reset_sample_state = tf.group(*reset_list)
 
             embeddings = self._embed([sample_input])
-            print('embeddings:', embeddings)
+            #print('embeddings:', embeddings)
             rnn_output, sample_state = self._rnn_module(embeddings, saved_sample_state)
             sample_logits = self._output_module(rnn_output)
 

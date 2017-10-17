@@ -43,11 +43,31 @@ def filter_text(text, allowed_letters):
     return new_text
 
 
-def char2vec(char, characters_positions_in_vocabulary):
-    voc_size = len(characters_positions_in_vocabulary)
+def char2vec(char, character_positions_in_vocabulary):
+    voc_size = len(character_positions_in_vocabulary)
     vec = np.zeros(shape=(1, voc_size), dtype=np.float)
-    vec[0, char2id(char, characters_positions_in_vocabulary)] = 1.0
+    vec[0, char2id(char, character_positions_in_vocabulary)] = 1.0
     return vec
+
+
+def pred2vec(pred):
+    shape = pred.shape
+    vecs = np.zeros(shape, dtype=np.float32)
+    ids = np.argmax(pred, 1)
+    for char_idx, char_id in enumerate(np.nditer(ids)):
+        vecs[char_idx, char_id] = 1.
+    return vecs
+
+
+def vec2char(pred, vocabulary):
+    char_list = list()
+    ids = np.argmax(pred, 1)
+    for id in np.nditer(ids):
+        char_list.append(id2char(id, vocabulary))
+    if len(char_list) > 1:
+        return char_list[0]
+    else:
+        return char_list
 
 
 def create_and_save_vocabulary(input_file_name,
@@ -158,3 +178,180 @@ def flatten(nested):
         flattened = flatten(inner_object)
         output.extend(flattened)
     return output
+
+
+def loop_through_indices(filename, start_index):
+    path, name = split_to_path_and_name(filename)
+    if '.' in name:
+        inter_list = name.split('.')
+        extension = inter_list[-1]
+        base = '.'.join(inter_list[:-1])
+        base += '#%s'
+        name = '.'.join([base, extension])
+
+    else:
+        name += '#%s'
+    if path != '':
+        base_path = '/'.join([path, name])
+    else:
+        base_path = name
+    index = start_index
+    while os.path.exists(base_path % index):
+        index += 1
+    return base_path % index
+
+
+def add_index_to_filename_if_needed(filename, index=None):
+    if index is not None:
+        return loop_through_indices(filename, index)
+    if os.path.exists(filename):
+        return loop_through_indices(filename, 1)
+    return filename
+
+
+def split_to_path_and_name(path):
+    parts = path.split('/')
+    name = parts[-1]
+    path = '/'.join(parts[:-1])
+    return path, name
+
+
+def create_path(path, file_name_is_in_path=False):
+    if file_name_is_in_path:
+        folder_list = path.split('/')[:-1]
+    else:
+        folder_list = path.split('/')
+    if len(folder_list) > 0:
+        if folder_list[0] == '':
+            current_folder = '/'
+        else:
+            current_folder = folder_list[0]
+        for idx, folder in enumerate(folder_list):
+            if idx > 0:
+                current_folder += ('/' + folder)
+            if not os.path.exists(current_folder):
+                os.mkdir(current_folder)
+
+
+def compute_perplexity(probabilities):
+    probabilities[probabilities < 1e-10] = 1e-10
+    log_probs = np.log2(probabilities)
+    entropy_by_character = np.sum(- probabilities * log_probs, axis=1)
+    return np.mean(np.exp2(entropy_by_character))
+
+
+def compute_loss(predictions, labels):
+    predictions[predictions < 1e-10] = 1e-10
+    log_predictions = np.log(predictions)
+    bpc_by_character = np.sum(- labels * log_predictions, axis=1)
+    return np.mean(bpc_by_character)
+
+
+def compute_bpc(predictions, labels):
+    return compute_loss(predictions, labels) / np.log(2)
+
+
+def compute_accuracy(predictions, labels):
+    num_characters = predictions.shape[0]
+    num_correct = 0
+    for i in range(num_characters):
+        if labels[i, np.argmax(predictions, axis=1)[i]] == 1:
+            num_correct += 1
+    return float(num_correct) / num_characters
+
+
+def match_two_dicts(small_dict, big_dict):
+    """Compares keys of small_dict to keys of big_dict and if in small_dict there is a key missing in big_dict throws
+    an error"""
+    big_dict_keys = big_dict.keys()
+    for key in small_dict.keys():
+        if key not in big_dict_keys:
+            raise KeyError("Wrong argument name '%s'" % key)
+    return True
+
+
+def split_dictionary(dict_to_split, bases):
+    """Function takes dictionary dict_to_split and splits it into several dictionaries according to keys of dicts
+    from bases"""
+    dicts = list()
+    for base in bases:
+        if isinstance(base, dict):
+            base_keys = base.keys()
+        else:
+            base_keys = base
+        new_dict = dict()
+        for key, value in dict_to_split.items():
+            if key in base_keys:
+                new_dict[key] = value
+        dicts.append(new_dict)
+    return dicts
+
+
+def link_into_dictionary(old_dictionary, old_keys, new_key):
+    """Used in _parse_train_method_arguments to united several kwargs into one dictionary
+    Args:
+        old_dictionary: a dictionary which entries are to be united
+        old_keys: list of keys to be united
+        new_key: the key of new entry  containing linked dictionary"""
+    linked = dict()
+    for old_key in old_keys:
+        if old_key in linked:
+            linked[old_key] = old_dictionary[old_key]
+            del old_dictionary[old_key]
+    old_dictionary[new_key] = linked
+    return old_dictionary
+
+
+def paste_into_nested_structure(structure, searched_key, value_to_paste):
+    #print('***********************')
+    if isinstance(structure, dict):
+        for key, value, in structure.items():
+            #print('key:', key)
+            if key == searched_key:
+                structure[key] = construct(value_to_paste)
+            else:
+                if isinstance(value, (dict, list, tuple)):
+                    paste_into_nested_structure(value, searched_key, value_to_paste)
+    elif isinstance(structure, (list, tuple)):
+        for elem in structure:
+            paste_into_nested_structure(elem, searched_key, value_to_paste)
+
+
+def check_if_key_in_nested_dict(dictionary, keys):
+    new_key_list = keys[1:]
+    if keys[0] not in dictionary:
+        return False
+    if len(new_key_list) == 0:
+        return True
+    value = dictionary[keys[0]]
+    if not isinstance(value, dict):
+        return False
+    return check_if_key_in_nested_dict(value, new_key_list)
+
+
+def search_in_nested_dictionary(dictionary, searched_key):
+    for key, value in dictionary.items():
+        if key == searched_key:
+            return value
+        else:
+            if isinstance(value, dict):
+                returned_value = search_in_nested_dictionary(value, searched_key)
+                if returned_value is not None:
+                    return returned_value
+    return None
+
+
+def add_missing_to_list(extended_list, added_list):
+    for elem in added_list:
+        if elem not in extended_list:
+            extended_list.append(elem)
+    return extended_list
+
+
+def print_and_log(*inputs, log=True, _print=True, fd=None):
+    if _print:
+        print(*inputs)
+    if log:
+        for inp in inputs:
+            fd.write(str(inp))
+        fd.write('\n')

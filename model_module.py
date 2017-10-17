@@ -1184,7 +1184,7 @@ class MODEL(object):
                 counter = 0
                 char = None
                 bot_replica = ""
-                while char != '\n' or counter > 500: 
+                while char != '\n' and counter < 500: 
                     feed = sample(prediction, self._vocabulary_size)
                     prediction = self._sample_prediction.eval({self._sample_input: feed})
                     char = characters(feed, self._vocabulary)[0]   
