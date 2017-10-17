@@ -200,12 +200,14 @@ kwargs_for_building = dict(
           characters_positions_in_vocabulary=cpiv)
 
 list_of_lr = [
-    dict(type='exponential_decay', init=v, decay=.9, period=500, name='learning_rate') for v in [10., 5., 3., 1., .3]]
+    dict(type='exponential_decay', init=v, decay=.9, period=500, name='learning_rate') for v in [.02, .01,
+                                                                                                 .005, .002, .001,
+                                                                                                 .0005, .0002]]
 # list_of_lr = [dict(type='exponential_decay', init=v, decay=.9, period=500, name='learning_rate') for v in [3.]]
 
 env.several_launches(evaluation,
                      kwargs_for_building,
-                     build_hyperparameters={'init_parameter': [.01, .03, .1, .3, 1., 3.]},
+                     build_hyperparameters={'init_parameter': [.1, .3, .5, 1., 2., 4., 6., 8., 10.]},
                      # build_hyperparameters={'init_parameter': [.3]},
                      other_hyperparameters={'learning_rate': list_of_lr},
                      batch_size=64,
@@ -213,11 +215,11 @@ env.several_launches(evaluation,
                      printed_result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
                      #printed_result_types=None,
                      vocabulary=vocabulary,
-                     stop=300,
+                     stop=1000,
                      num_unrollings=21,
                      train_dataset_text=train_text,
                      validation_dataset_texts=[valid_text],
-                     results_collect_interval=20,
+                     results_collect_interval=100,
                      no_validation=False,
                      additional_feed_dict=None)
 
