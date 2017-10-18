@@ -101,6 +101,8 @@ class Controller(object):
 
 class Handler(object):
 
+    _stars = '*'*30
+
     def __init__(self,
                  environment_instance,
                  hooks,
@@ -113,7 +115,9 @@ class Handler(object):
                  save_to_storage=None,
                  print_results=None,
                  eval_dataset_names=None,
-                 hyperparameters=None):
+                 hyperparameters=None,
+                 batch_generator_class=None,
+                 vocabulary=None):
         continuous_chit_chat = ['simple_fontain']
         self._processing_type = processing_type
         self._environment_instance = environment_instance
@@ -125,10 +129,12 @@ class Handler(object):
         self._save_to_file = save_to_file
         self._save_to_storage = save_to_storage
         self._print_results = print_results
+
+        self._batch_generator_class = batch_generator_class
+        self._vocabulary = vocabulary
         if self._save_path is not None:
             create_path(self._save_path)
         if self._processing_type == 'train':
-            self.process_results = self._fork_process_results
             self._train_files = dict()
             if self._save_path is not None:
                 self._train_files['loss'] = open(self._save_path +
@@ -160,6 +166,16 @@ class Handler(object):
             self._example_per_print = None
             self._train_tensor_schedule = None
             self._validation_tensor_schedule = None
+
+            self._fuses = None
+            self._fuse_file_name = None
+            self._fuse_tensor_schedule = None
+
+            self._processed_fuse_index = None
+
+            self._text_is_being_accumulated = False
+            self._accumulated_text = None
+
             self._printed_result_types = None
             self._printed_controllers = None
             if summary and self._save_path is not None:
@@ -179,7 +195,6 @@ class Handler(object):
             if self._bpc:
                 self._accumulated['bpc'] = None
         if self._processing_type == 'test':
-            self.process_results = self._fork_process_results
             self._name_of_dataset_on_which_accumulating = None
             self._dataset_specific = dict()
             self._validation_tensor_schedule = None
@@ -188,7 +203,6 @@ class Handler(object):
             if self._bpc:
                 self._accumulated['bpc'] = None
         if self._processing_type == 'several_launches':
-            self.process_results = self._several_launches_results_processing
             self._result_types = result_types
             self._eval_dataset_names = eval_dataset_names
             self._save_path = save_path
@@ -274,6 +288,15 @@ class Handler(object):
         self._validation_tensor_schedule = schedule['validation_tensor_schedule']
         self._printed_controllers = schedule['printed_controllers']
         self._printed_result_types = schedule['printed_result_types']
+
+        self._fuses = schedule['fuses']
+        self._fuse_tensor_schedule = schedule['fuse_tensors']
+        if self._fuses is not None:
+            for fuse in self._fuses:
+                fuse['results'] = list()
+        if self._fuse_file_name is None:
+            self._fuse_file_name = add_index_to_filename_if_needed(self._save_path + '/fuses.txt')
+
         if self._printed_result_types is not None:
             if len(self._printed_result_types) > 0:
                 self._print_results = True
@@ -343,6 +366,63 @@ class Handler(object):
         self._name_of_dataset_on_which_accumulating = None
         self._save_accumulated_tensors()
         return means
+
+    def set_processed_fuse_index(self, fuse_idx):
+        self._processed_fuse_index = fuse_idx
+
+    def start_text_accumulation(self):
+        self._accumulated_text = ''
+        self._text_is_being_accumulated = True
+
+    def stop_text_accumulation(self):
+        self._fuses[self._processed_fuse_index]['results'].append(str(self._accumulated_text))
+        self._accumulated_text = None
+        self._text_is_being_accumulated = False
+
+    def _prepair_string(self, res):
+        preprocessed = ''
+        for char in res:
+            preprocessed += self._form_string_char(char)
+        return preprocessed
+
+    def _form_fuse_msg(self, training_step):
+        msg = ''
+        if training_step is not None:
+            msg += 'generation from fuses on step %s' % str(training_step) + '\n'
+        else:
+            msg += 'generation from fuses\n'
+        msg += (self._stars + '\n') * 2
+        for fuse in self._fuses:
+            msg += ('\nfuse: ' + fuse['text'] + '\n')
+            msg += self._stars + '\n'
+            for res_idx, res in enumerate(fuse['results']):
+                if res_idx > 0:
+                    msg += ('\nlaunch number: ' + str(res_idx) + '\n')
+                else:
+                    msg += ('launch number: ' + str(res_idx) + '\n')
+                msg += ('result: ' + self._prepair_string(res) + '\n')
+            msg += self._stars + '\n'*2
+        msg += (self._stars + '\n') * 2
+        return msg
+
+    def _print_fuse_results(self, training_step):
+        print(self._form_fuse_msg(training_step))
+
+    def _save_fuse_results(self, training_step):
+        with open(self._fuse_file_name, 'a', encoding='utf-8') as fd:
+            fd.write(self._form_fuse_msg(training_step) + '\n'*2)
+
+    def clean_fuse_results(self):
+        for fuse in self._fuses:
+            fuse['results'] = list()
+
+    def dispense_fuse_results(self, training_step):
+        if self._example_per_print is not None:
+            self._print_fuse_results(training_step)
+        if self._save_path is not None:
+            self._save_fuse_results(training_step)
+        for fuse in self._fuses:
+            fuse['results'] = list()
 
     def _process_validation_results(self,
                                     step,
@@ -440,6 +520,8 @@ class Handler(object):
                 tensors.extend(additional_tensors)
         if regime == 'validation':
             tensors.append(self._hooks['validation_predictions'])
+            current['tensors']['validation_predictions'] = [pointer, pointer + 1]
+            pointer += 1
             for res_type in self._result_types:
                 tensors.append(self._hooks['validation_' + res_type])
                 current['tensors']['validation_' + res_type] = [pointer, pointer + 1]
@@ -449,6 +531,15 @@ class Handler(object):
             if self._validation_tensor_schedule is not None:
                 additional_tensors = self._get_additional_tensors(self._validation_tensor_schedule, step, pointer)
                 tensors.extend(additional_tensors)
+        if regime == 'fuse':
+            tensors.append(self._hooks['validation_predictions'])
+            current['tensors']['validation_predictions'] = [pointer, pointer + 1]
+            pointer += 1
+            self._last_run_tensor_order['basic']['borders'] = [start, pointer]
+            if self._fuse_tensor_schedule is not None:
+                additional_tensors = self._get_additional_tensors(self._fuse_tensor_schedule, step, pointer)
+                tensors.extend(additional_tensors)
+
         #print(tensors)
         return tensors
 
@@ -490,8 +581,8 @@ class Handler(object):
             self._last_run_tensor_order[tensors_use]['borders'] = [start, pointer]
         return additional_tensors
 
-    def _print_tensors(self, instructions, print_step=False, indent=0):
-        if print_step:
+    def _print_tensors(self, instructions, print_step_number=False, indent=0):
+        if print_step_number:
             print('\n'*indent + 'step:', instructions['step'])
         print(instructions['message'])
         for alias, res in instructions['results'].items():
@@ -652,7 +743,6 @@ class Handler(object):
                                                                  perplexity=perplexity,
                                                                  accuracy=accuracy,
                                                                  steps=step)
-        self._save_tensors(train_res[3:])
         print_borders = self._last_run_tensor_order['train_print_tensors']['borders']
         if print_borders[1] - print_borders[0] > 0:
             print_instructions = self._form_train_tensor_print_instructions(step,
@@ -664,19 +754,67 @@ class Handler(object):
             else:
                 indent = 1
             self._print_tensors(print_instructions,
-                                print_step=not other_stuff_is_printed,
+                                print_step_number=not other_stuff_is_printed,
                                 indent=indent)
+
+    @staticmethod
+    def _form_string_char(char):
+        special_characters_map = {'\n': '\\n',
+                                  '\t': '\\t'}
+        if char in list(special_characters_map.keys()):
+            return special_characters_map[char]
+        else:
+            return char
+
+    def _form_fuse_tensor_print_instructions(self, step, char, fuse_res, last_order):
+        instructions = dict()
+        instructions['step'] = step
+        instructions['message'] = 'fuse tensors:\nchar = %s' % self._form_string_char(char)
+        instructions['results'] = dict()
+        extracted_for_printing = self._extract_results(last_order, 'fuse_print_tensors', fuse_res)
+        #print('extracted_for_printing:', extracted_for_printing)
+        instructions['results'].update(extracted_for_printing)
+        return instructions
+
+    def _process_char_generation_results(self, step, res):
+        basic_borders = self._last_run_tensor_order['basic']['borders']
+        [prediction] = res[basic_borders[0]:basic_borders[1]]
+        char = self._batch_generator_class.vec2char(prediction, self._vocabulary)[0]
+        if self._text_is_being_accumulated:
+            self._accumulated_text += char
+        if 'fuse_print_tensors' in self._last_run_tensor_order:
+            print_borders = self._last_run_tensor_order['fuse_print_tensors']['borders']
+            if print_borders[1] - print_borders[0] > 0:
+                print_instructions = self._form_fuse_tensor_print_instructions(step,
+                                                                               char,
+                                                                               res,
+                                                                               self._last_run_tensor_order)
+                self._print_tensors(print_instructions,
+                                    print_step_number=True,
+                                    indent=1)
 
     def _several_launches_results_processing(self, hp, results):
         self._environment_instance.set_in_storage(launches=(results, hp))
         self._save_launch_results(results, hp)
         self._print_launch_results(results, hp)
 
-    def _fork_process_results(self, step, res, regime):
+    def process_results(self, *args, regime=None):
         if regime == 'train':
+            step = args[0]
+            res = args[1]
             self._process_train_results(step, res)
         if regime == 'validation':
+            step = args[0]
+            res = args[1]
             self._process_validation_results(step, res)
+        if regime == 'fuse':
+            step = args[0]
+            res = args[1]
+            self._process_char_generation_results(step, res)
+        if regime =='several_launches':
+            hp = args[0]
+            res = args[1]
+            self._several_launches_results_processing(hp, res)
 
     def close(self):
         for file in self._train_files.values():
@@ -951,7 +1089,8 @@ class Environment(object):
                              ['loss', 'perplexity', 'accuracy']),
                          'summary': False,
                          'add_graph_to_summary': False,
-                         'batch_generator_class': self._default_batch_generator},
+                         'batch_generator_class': self._default_batch_generator,
+                         'vocabulary': self._vocabulary},
             run=dict(
                 train_specs={'assistant': None,
                              'learning_rate': construct(default_learning_rate_control),
@@ -1165,30 +1304,50 @@ class Environment(object):
         pass
 
     def _on_fuses(self,
-                  batch_generator_class,
+                  batch_generator,
                   fuses,
-                  fuse_tensors,
+                  training_step=None,
                   additional_feed_dict=None):
-        if 'reset_validation_state' in self._pupil_hooks:
-            self._session.run(self._pupil_hooks['reset_validation_state'])
-        generator = batch_generator_class(by_character=True)
-        for fuse in fuses:
+        for fuse_idx, fuse in enumerate(fuses):
+            self._handler.set_processed_fuse_index(fuse_idx)
             for repeat_idx in range(fuse['num_repeats']):
-                for char_idx, char in enumerate(fuse):
-                    vec = generator.char2vec(char)
+                if 'randomize_sample_state' in self._pupil_hooks:
+                    self._session.run(self._pupil_hooks['randomize_sample_state'])
+                elif 'reset_validation_state' in self._pupil_hooks:
+                    self._session.run(self._pupil_hooks['reset_validation_state'])
+                for char_idx, char in enumerate(fuse['text']):
+                    vec = batch_generator.char2vec(char, batch_generator.characters_positions_in_vocabulary)
                     feed_dict = {self._pupil_hooks['validation_inputs']: vec}
-                    feed_dict = dict(feed_dict.items(), additional_feed_dict.items())
-                    fuse_operations = [self._pupil_hooks['validation_prediction']]
-                    fuse_operations.extend([self._pupil_hooks[key] for key in fuse_tensors])
+                    feed_dict.update(additional_feed_dict)
+                    fuse_operations = self._handler.get_tensors('fuse', char_idx)
                     fuse_res = self._session.run(fuse_operations, feed_dict=feed_dict)
-                    self._process_results(fuse_res)
-                vec = generator.pred2vec(fuse_res[0])
-                feed_dict = {self._pupil_hooks['validation_inputs']: vec}
-                feed_dict = dict(feed_dict.items(), additional_feed_dict.items())
-                fuse_operations = [self._pupil_hooks['validation_prediction']]
-                fuse_operations.extend([self._pupil_hooks[key] for key in fuse_tensors])
-                fuse_res = self._session.run(fuse_operations, feed_dict=feed_dict)
-                self._process_results(fuse_res)
+                    self._handler.process_results(char_idx, fuse_res, regime='fuse')
+                self._handler.start_text_accumulation()
+                if fuse['fuse_stop'] == 'limit':
+                    for char_idx in range(len(fuse['text']), len(fuse['text']) + fuse['max_num_of_chars'] ):
+                        vec = batch_generator.pred2vec(fuse_res[0])
+                        feed_dict = {self._pupil_hooks['validation_inputs']: vec}
+                        feed_dict.update(additional_feed_dict)
+                        fuse_operations = self._handler.get_tensors('fuse', char_idx)
+                        fuse_res = self._session.run(fuse_operations, feed_dict=feed_dict)
+                        self._handler.process_results(char_idx, fuse_res, regime='fuse')
+                if fuse['fuse_stop'] == 'new_line':
+                    char = None
+                    counter = 0
+                    char_idx = len(fuse['text'])
+                    while char != '\n' and counter < fuse['max_num_of_chars']:
+                        vec = batch_generator.pred2vec(fuse_res[0])
+                        feed_dict = {self._pupil_hooks['validation_inputs']: vec}
+                        feed_dict.update(additional_feed_dict)
+                        fuse_operations = self._handler.get_tensors('fuse', char_idx)
+                        fuse_res = self._session.run(fuse_operations, feed_dict=feed_dict)
+                        self._handler.process_results(char_idx, fuse_res, regime='fuse')
+                        char = batch_generator.vec2char(fuse_res[0], batch_generator.vocabulary)
+                        counter += 1
+                        char_idx += 1
+                self._handler.stop_text_accumulation()
+            self._handler.set_processed_fuse_index(None)
+        self._handler.dispense_fuse_results(training_step)
 
     def _validate(self,
                   batch_generator_class,
@@ -1216,7 +1375,7 @@ class Environment(object):
             if additional_feed_dict is not None:
                 feed_dict = dict(feed_dict.items(), additional_feed_dict.items())
             valid_res = self._session.run(validation_operations, feed_dict=feed_dict)
-            self._handler.process_results(training_step, valid_res, 'validation')
+            self._handler.process_results(training_step, valid_res, regime='validation')
             step += 1
             inputs, labels = valid_batches.next()
         means = self._handler.stop_accumulation(save_to_file=save_to_file,
@@ -1327,15 +1486,26 @@ class Environment(object):
         to_be_collected_while_training = schedule['to_be_collected_while_training']
         collect_interval = to_be_collected_while_training['results_collect_interval']
         print_per_collected = to_be_collected_while_training['print_per_collected']
+        example_per_print = to_be_collected_while_training['example_per_print']
 
         if train_specs['no_validation'] or collect_interval is None:
             it_is_time_for_validation = Controller(self._storage,
                                                    {'type': 'always_false'})
+            it_is_time_for_example = Controller(self._storage,
+                                                {'type': 'always_false'})
         else:
             valid_period = collect_interval * print_per_collected
             it_is_time_for_validation = Controller(self._storage,
                                                    {'type': 'periodic_truth',
                                                     'period': valid_period})
+            if example_per_print is None:
+                it_is_time_for_example = Controller(self._storage,
+                                                    {'type': 'always_false'})
+            else:
+                example_period = valid_period * example_per_print
+                it_is_time_for_example = Controller(self._storage,
+                                                    {'type': 'periodic_truth',
+                                                     'period': example_period})
 
         if train_specs['checkpoint_steps'] is not None and checkpoints_path is not None:
             if train_specs['checkpoint_steps']['type'] == 'true_on_steps':
@@ -1428,7 +1598,7 @@ class Environment(object):
             train_res = self._session.run(train_operations, feed_dict=feed_dict)
             # here loss is given in bits per input (BPI)
 
-            self._handler.process_results(step, train_res, 'train')
+            self._handler.process_results(step, train_res, regime='train')
             if it_is_time_for_validation.get():
                 for validation_dataset in train_specs['validation_datasets']:
                     if train_feed_dict_additions is None:
@@ -1443,6 +1613,15 @@ class Environment(object):
                                        train_specs['valid_batch_kwargs'],
                                        training_step=step,
                                        additional_feed_dict=valid_add_feed_dict)
+            if it_is_time_for_example.get():
+                valid_add_feed_dict = dict()
+                if train_feed_dict_additions is not None:
+                    for addition, add_controller in zip(train_feed_dict_additions, additional_controllers):
+                        valid_add_feed_dict[self._pupil_hooks[addition['placeholder']]] = add_controller.get()
+                self._on_fuses(train_batches,
+                               schedule['fuses'],
+                               training_step=step,
+                               additional_feed_dict=valid_add_feed_dict)
             step += 1
             self.set_in_storage(step=step)
         return step
@@ -1808,7 +1987,9 @@ class Environment(object):
                                 start_specs['save_path'],
                                 start_specs['result_types'],
                                 summary=start_specs['summary'],
-                                add_graph_to_summary=start_specs['add_graph_to_summary'])
+                                add_graph_to_summary=start_specs['add_graph_to_summary'],
+                                batch_generator_class=start_specs['batch_generator_class'],
+                                vocabulary=start_specs['vocabulary'])
         if start_specs['save_path'] is not None:
             checkpoints_path = start_specs['save_path'] + '/checkpoints'
             create_path(checkpoints_path)
@@ -1954,7 +2135,7 @@ class Environment(object):
                 res = queue.get()
                 #print('res:', res)
                 hp.update(build_hp_values)
-                self._handler.process_results(hp, res)
+                self._handler.process_results(hp, res, regime='several_launches')
             p.join()
 
     def inference(self,
@@ -1962,9 +2143,7 @@ class Environment(object):
                   log_path,
                   vocabulary,
                   characters_positions_in_vocabulary,
-                  char2vec,
-                  vec2char,
-                  pred2vec,
+                  batch_generator_class,
                   gpu_memory=None,
                   appending=True,
                   first_speaker='human'):
@@ -1997,23 +2176,23 @@ class Environment(object):
                 if human_replica != '':
                     print_and_log('Human: ' + human_replica, _print=False, fd=fd)
                     for char in human_replica:
-                        feed = char2vec(char, characters_positions_in_vocabulary)
+                        feed = batch_generator_class.char2vec(char, characters_positions_in_vocabulary)
                         #print('feed.shape:', feed.shape)
                         _ = sample_prediction.eval({sample_input: feed})
-                feed = char2vec('\n', characters_positions_in_vocabulary)
+                feed = batch_generator_class.char2vec('\n', characters_positions_in_vocabulary)
                 prediction = sample_prediction.eval({sample_input: feed})
                 counter = 0
                 char = None
                 bot_replica = ""
                 while char != '\n' and counter < 500:
-                    feed = pred2vec(prediction)
+                    feed = batch_generator_class.pred2vec(prediction)
                     prediction = sample_prediction.eval({sample_input: feed})
-                    char = vec2char(np.reshape(feed, (1, -1)), vocabulary)[0]
+                    char = batch_generator_class.vec2char(np.reshape(feed, (1, -1)), vocabulary)[0]
                     if char != '\n':
                         bot_replica += char
                     counter += 1
                 print_and_log('Bot: ' + bot_replica, fd=fd)
-                feed = char2vec('\n', characters_positions_in_vocabulary)
+                feed = batch_generator_class.char2vec('\n', characters_positions_in_vocabulary)
                 _ = sample_prediction.eval({sample_input: feed})
 
                 human_replica = input('Human: ')

@@ -241,6 +241,17 @@ class Lstm(Model):
                 reset_list.append(tf.assign(variable, tf.zeros(shape), name='assign_reset_%s' % name))
             return reset_list
 
+    def _compose_randomize_list(self, *args):
+        with tf.name_scope('randomize_list'):
+            randomize_list = list()
+            flattened = flatten(args)
+            for variable in flattened:
+                shape = variable.get_shape().as_list()
+                name = self._extract_op_name(variable.name)
+                assign_tensor = tf.truncated_normal(shape, stddev=1.)
+                randomize_list.append(tf.assign(variable, assign_tensor, name='assign_reset_%s' % name))
+            return randomize_list
+
     def _compute_lstm_matrix_parameters(self, idx):
         if idx == 0:
             print(self._num_nodes)
@@ -385,6 +396,9 @@ class Lstm(Model):
             reset_list = self._compose_reset_list(saved_sample_state)
             self.reset_sample_state = tf.group(*reset_list)
 
+            randomize_list = self._compose_randomize_list(saved_sample_state)
+            self.randomize = tf.group(*randomize_list)
+
             embeddings = self._embed([sample_input])
             #print('embeddings:', embeddings)
             rnn_output, sample_state = self._rnn_module(embeddings, saved_sample_state)
@@ -407,6 +421,7 @@ class Lstm(Model):
         hooks['validation_inputs'] = self.sample_input
         hooks['validation_predictions'] = self.sample_prediction
         hooks['reset_validation_state'] = self.reset_sample_state
+        hooks['randomize_sample_state'] = self.randomize
         hooks['saver'] = self.saver
         return hooks
 

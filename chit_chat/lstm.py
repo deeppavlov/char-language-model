@@ -5,18 +5,11 @@ import zipfile
 import codecs
 import os
 from some_useful_functions import (construct, create_vocabulary,
-                                   get_positions_in_vocabulary, char2vec, pred2vec,
+                                   get_positions_in_vocabulary, char2vec, pred2vec, vec2char,
                                    char2id, id2char, flatten)
 
 
 url = 'http://mattmahoney.net/dc/'
-
-def char2batchvec(char, characters_positions_in_vocabulary):
-    return np.reshape(char2vec(char, characters_positions_in_vocabulary), (1, 1, -1))
-
-
-def pred2batchvec(pred):
-    return np.reshape(pred2vec(pred), (1, 1, -1))
 
 
 class LstmBatchGenerator(object):
@@ -28,13 +21,25 @@ class LstmBatchGenerator(object):
             text += t
         return create_vocabulary(text)
 
+    @staticmethod
+    def char2vec(char, characters_positions_in_vocabulary):
+        return np.reshape(char2vec(char, characters_positions_in_vocabulary), (1, 1, -1))
+
+    @staticmethod
+    def pred2vec(pred):
+        return np.reshape(pred2vec(pred), (1, 1, -1))
+
+    @staticmethod
+    def vec2char(vec, vocabulary):
+        return vec2char(vec, vocabulary)
+
     def __init__(self, text, batch_size, num_unrollings=1, vocabulary=None):
         self._text = text
         self._text_size = len(text)
         self._batch_size = batch_size
-        self._vocabulary = vocabulary
-        self._vocabulary_size = len(self._vocabulary)
-        self._characters_positions_in_vocabulary = get_positions_in_vocabulary(self._vocabulary)
+        self.vocabulary = vocabulary
+        self._vocabulary_size = len(self.vocabulary)
+        self.characters_positions_in_vocabulary = get_positions_in_vocabulary(self.vocabulary)
         self._num_unrollings = num_unrollings
         segment = self._text_size // batch_size
         self._cursor = [offset * segment for offset in range(batch_size)]
@@ -49,7 +54,7 @@ class LstmBatchGenerator(object):
     def _start_batch(self):
         batch = np.zeros(shape=(self._batch_size, self._vocabulary_size), dtype=np.float)
         for b in range(self._batch_size):
-            batch[b, char2id('\n', self._characters_positions_in_vocabulary)] = 1.0
+            batch[b, char2id('\n', self.characters_positions_in_vocabulary)] = 1.0
         return batch
 
     def _zero_batch(self):
@@ -59,18 +64,18 @@ class LstmBatchGenerator(object):
         """Generate a single batch from the current cursor position in the data."""
         batch = np.zeros(shape=(self._batch_size, self._vocabulary_size), dtype=np.float)
         for b in range(self._batch_size):
-            batch[b, char2id(self._text[self._cursor[b]], self._characters_positions_in_vocabulary)] = 1.0
+            batch[b, char2id(self._text[self._cursor[b]], self.characters_positions_in_vocabulary)] = 1.0
             self._cursor[b] = (self._cursor[b] + 1) % self._text_size
         return batch
 
-    def char2vec(self, char):
-        return np.stack(char2vec(char, self._characters_positions_in_vocabulary)), np.stack(self._zero_batch())
+    def char2batch(self, char):
+        return np.stack(char2vec(char, self.characters_positions_in_vocabulary)), np.stack(self._zero_batch())
 
-    def pred2vec(self, pred):
+    def pred2batch(self, pred):
         batch = np.zeros(shape=(self._batch_size, self._vocabulary_size), dtype=np.float)
         char_id = np.argmax(pred, 1)[-1]
         batch[0, char_id] = 1.0
-        return batch, self._zero_batch()
+        return np.stack([batch]), np.stack([self._zero_batch()])
 
     def next(self):
         """Generate the next array of batches from the data. The array consists of
@@ -232,6 +237,19 @@ class Lstm(Model):
                 reset_list.append(tf.assign(variable, tf.zeros(shape), name='assign_reset_%s' % name))
             return reset_list
 
+    def _compose_randomize_list(self, *args):
+        with tf.name_scope('randomize_list'):
+            randomize_list = list()
+            flattened = flatten(args)
+            for variable in flattened:
+                shape = variable.get_shape().as_list()
+                name = self._extract_op_name(variable.name)
+                assign_tensor = tf.truncated_normal(shape, stddev=1.)
+                #assign_tensor = tf.Print(assign_tensor, [assign_tensor], message='assign tensor:')
+                assign = tf.assign(variable, assign_tensor, name='assign_reset_%s' % name)
+                randomize_list.append(assign)
+            return randomize_list
+
     def _compute_lstm_matrix_parameters(self, idx):
         if idx == 0:
             print(self._num_nodes)
@@ -371,6 +389,9 @@ class Lstm(Model):
             reset_list = self._compose_reset_list(saved_sample_state)
             self.reset_sample_state = tf.group(*reset_list)
 
+            randomize_list = self._compose_randomize_list(saved_sample_state)
+            self.randomize = tf.group(*randomize_list)
+
             embeddings = self._embed([sample_input])
             #print('embeddings:', embeddings)
             rnn_output, sample_state = self._rnn_module(embeddings, saved_sample_state)
@@ -393,6 +414,7 @@ class Lstm(Model):
         hooks['validation_inputs'] = self.sample_input
         hooks['validation_predictions'] = self.sample_prediction
         hooks['reset_validation_state'] = self.reset_sample_state
+        hooks['randomize_sample_state'] = self.randomize
         hooks['saver'] = self.saver
         return hooks
 
