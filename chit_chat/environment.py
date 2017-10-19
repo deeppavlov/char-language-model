@@ -1082,7 +1082,8 @@ class Environment(object):
         self._default_train_method_args = dict(
             session_specs={'allow_soft_placement': False,
                            'gpu_memory': None,
-                           'log_device_placement': False},
+                           'log_device_placement': False,
+                           'visible_device_list': ""},
             start_specs={'restore_path': None,
                          'save_path': None,
                          'result_types': self.put_result_types_in_correct_order(
@@ -1256,15 +1257,15 @@ class Environment(object):
             return self.default_train_method_args
         return None
 
-    def _start_session(self, allow_soft_placement, log_device_placement, gpu_memory):
+    def _start_session(self, allow_soft_placement, log_device_placement, gpu_memory, visible_device_list):
         """Starts new session with specified parameters. If there is opend session closes it"""
         if self._session is not None:
             print('Warning: there is an opened session already. Closing it')
             self._session.close()
-
         config = tf.ConfigProto(allow_soft_placement=allow_soft_placement,
                                 log_device_placement=log_device_placement,
-                                gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=gpu_memory))
+                                gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=gpu_memory,
+                                                          visible_device_list=visible_device_list))
         self._session = tf.Session(config=config)
 
     def _close_session(self):
@@ -1300,7 +1301,11 @@ class Environment(object):
         elif model_type == 'assistant':
             self._assistant_hooks['saver'].save(self._session, path)
 
-    def test(self, **kwargs):
+    def test(self,
+             restore_path=None,
+             save_path=None,
+             result_types=['loss', 'bpc', 'perplexity', 'accuracy'],
+             fuses=None):
         pass
 
     def _on_fuses(self,
@@ -1618,10 +1623,11 @@ class Environment(object):
                 if train_feed_dict_additions is not None:
                     for addition, add_controller in zip(train_feed_dict_additions, additional_controllers):
                         valid_add_feed_dict[self._pupil_hooks[addition['placeholder']]] = add_controller.get()
-                self._on_fuses(train_batches,
-                               schedule['fuses'],
-                               training_step=step,
-                               additional_feed_dict=valid_add_feed_dict)
+                if schedule['fuses'] is not None:
+                    self._on_fuses(train_batches,
+                                   schedule['fuses'],
+                                   training_step=step,
+                                   additional_feed_dict=valid_add_feed_dict)
             step += 1
             self.set_in_storage(step=step)
         return step
@@ -1968,7 +1974,8 @@ class Environment(object):
         if start_session:
             self._start_session(session_specs['allow_soft_placement'],
                                 session_specs['log_device_placement'],
-                                session_specs['gpu_memory'])
+                                session_specs['gpu_memory'],
+                                session_specs['visible_device_list'])
         self._train_repeatedly(start_specs, run_specs_set)
         if close_session:
             self._close_session()
@@ -2019,7 +2026,8 @@ class Environment(object):
         self._create_missing_hooks(all_tensor_aliases)
         self._start_session(session_specs['allow_soft_placement'],
                             session_specs['log_device_placement'],
-                            session_specs['gpu_memory'])
+                            session_specs['gpu_memory'],
+                            session_specs['visible_device_list'])
         datasets = dict(evaluation['datasets'].items())
         if 'train' in datasets:
             del datasets['train']

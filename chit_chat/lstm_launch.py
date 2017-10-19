@@ -3,7 +3,7 @@ from lstm import Lstm, LstmBatchGenerator
 from some_useful_functions import create_vocabulary, get_positions_in_vocabulary
 
 
-f = open('enwik8_clean', 'r', encoding='utf-8')
+f = open('datasets/ted.txt', 'r', encoding='utf-8')
 text = f.read()
 f.close()
 
@@ -24,7 +24,7 @@ cpiv = get_positions_in_vocabulary(vocabulary)
 
 env.build(batch_size=64,
           num_layers=2,
-          num_nodes=[2048],
+          num_nodes=[48, 48],
           vocabulary_size=vocabulary_size,
           embedding_size=128,
           num_unrollings=50,
@@ -47,4 +47,5 @@ env.train(save_path='debugging_environment/first',
           train_dataset_text=train_text,
           validation_dataset_texts=[valid_text],
           #validation_dataset=[valid_text],
-          results_collect_interval=400)
+          results_collect_interval=400,
+          visible_device_list="3")
