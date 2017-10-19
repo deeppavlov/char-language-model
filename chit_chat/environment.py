@@ -294,7 +294,7 @@ class Handler(object):
         if self._fuses is not None:
             for fuse in self._fuses:
                 fuse['results'] = list()
-        if self._fuse_file_name is None:
+        if self._fuse_file_name is None and self._fuses is not None and self._save_path is not None:
             self._fuse_file_name = add_index_to_filename_if_needed(self._save_path + '/fuses.txt')
 
         if self._printed_result_types is not None:
@@ -1988,6 +1988,8 @@ class Environment(object):
         else:
             self._session.run(tf.global_variables_initializer())
 
+        # print('start_specs:', start_specs)
+
         self._handler = Handler(self,
                                 self._pupil_hooks,
                                 'train',
@@ -2113,8 +2115,8 @@ class Environment(object):
         base = tmp_output
         del base['session_specs']
         args_for_launches = self._form_list_of_kwargs(base, other_hyperparameters)
-        print("args_for_launches[0][0]['run'][0]['train_specs']['learning_rate']:",
-              args_for_launches[0][0]['run'][0]['train_specs']['learning_rate'])
+        # print("args_for_launches[0][0]['start_specs']['save_path']:",
+        #       args_for_launches[0][0]['start_specs']['save_path'])
 
         args_for_launches, hp_values_list, _ = zip(*args_for_launches)
 
