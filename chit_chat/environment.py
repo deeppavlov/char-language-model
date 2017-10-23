@@ -6,7 +6,8 @@ import tensorflow as tf
 from tensorflow.python import debug as tf_debug
 from some_useful_functions import (construct, add_index_to_filename_if_needed, match_two_dicts, create_path,
                                    paste_into_nested_structure, check_if_key_in_nested_dict,
-                                   search_in_nested_dictionary, add_missing_to_list, print_and_log)
+                                   search_in_nested_dictionary, add_missing_to_list, print_and_log,
+                                   apply_temperature, sample)
 
 
 class Controller(object):
@@ -2181,6 +2182,7 @@ class Environment(object):
                   batch_generator_class,
                   gpu_memory=None,
                   appending=True,
+                  temperature=0.,
                   first_speaker='human'):
         create_path(log_path, file_name_is_in_path=True)
         if not appending:
@@ -2216,14 +2218,27 @@ class Environment(object):
                         _ = sample_prediction.eval({sample_input: feed})
                 feed = batch_generator_class.char2vec('\n', characters_positions_in_vocabulary)
                 prediction = sample_prediction.eval({sample_input: feed})
+                if temperature != 0.:
+                    prediction = apply_temperature(prediction, -1, temperature)
+                    prediction = sample(prediction, -1)
                 counter = 0
                 char = None
                 bot_replica = ""
-                while char != '\n' and counter < 500:
+                # print('ord(\'\\n\'):', ord('\n'))
+                while char != '\n' and counter < 10:
                     feed = batch_generator_class.pred2vec(prediction)
+                    # print('prediction after sampling:', prediction)
+                    # print('feed:', feed)
                     prediction = sample_prediction.eval({sample_input: feed})
+                    # print('prediction before sampling:', prediction)
+                    if temperature != 0.:
+                        prediction = apply_temperature(prediction, -1, temperature)
+                        # print('prediction after temperature:', prediction)
+                        prediction = sample(prediction, -1)
                     char = batch_generator_class.vec2char(np.reshape(feed, (1, -1)), vocabulary)[0]
                     if char != '\n':
+                        # print('char != \'\\n\', counter = %s' % counter)
+                        # print('ord(char):', ord(char))
                         bot_replica += char
                     counter += 1
                 print_and_log('Bot: ' + bot_replica, fd=fd)
