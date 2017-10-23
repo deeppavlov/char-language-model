@@ -1119,7 +1119,32 @@ class Environment(object):
                           'validation_tensor_schedule': construct(valid_tensor_schedule)}
                     )
                                                )
-
+        self._default_test_method_args = dict(
+            session_specs={'allow_soft_placement': False,
+                           'gpu_memory': None,
+                           'log_device_placement': False,
+                           'visible_device_list': ""},
+            start_specs={'restore_path': None,
+                         'save_path': None,
+                         'result_types': self.put_result_types_in_correct_order(
+                             ['loss', 'perplexity', 'accuracy']),
+                         'batch_generator_class': self._default_batch_generator,
+                         'vocabulary': self._vocabulary},
+            work=dict(additions_to_feed_dict=None,
+                      debug=None,
+                      validation_datasets=None,
+                      validation_batch_size=1,
+                      valid_batch_kwargs=dict(),
+                      no_validation=False,
+                      printed_result_types=self.put_result_types_in_correct_order(['loss']),
+                      fuses=None,
+                      fuse_tensors=construct(fuse_tensors),
+                      replicas=None,
+                      random={'number_of_runs': 5,
+                              'length': 80},
+                      validation_tensor_schedule=construct(valid_tensor_schedule)
+                    )
+                                               )
         # This attribute is used solely for controlling learning parameters (learning rate, additions_to_feed_dict)
         # It is used by instances of Controller class
         # BPI stands for bits per input. It is cross entropy computed using logarithm for base 2
@@ -1656,7 +1681,7 @@ class Environment(object):
             if isinstance(value, list):
                 new_value = {'type': 'true_on_steps', 'steps': value}
             elif isinstance(value, int):
-                new_value = {'type': 'true_on_steps', 'steps': [value]}
+                new_value = {'type': 'periodic_truth', 'steps': value}
             else:
                 new_value = {'type': 'always_false'}
             self._set_controller_name_in_specs(new_value, 'checkpoint_steps')
@@ -1984,7 +2009,7 @@ class Environment(object):
         # initializing model
         self.flush_storage()
         if start_specs['restore_path'] is not None:
-            self._hooks['saver'].restore(self._session, start_specs['restore_path'])
+            self._pupil_hooks['saver'].restore(self._session, start_specs['restore_path'])
         else:
             self._session.run(tf.global_variables_initializer())
 
