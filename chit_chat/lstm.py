@@ -1,9 +1,6 @@
 from __future__ import print_function
 import numpy as np
 import tensorflow as tf
-import zipfile
-import codecs
-import os
 from some_useful_functions import (construct, create_vocabulary,
                                    get_positions_in_vocabulary, char2vec, pred2vec, vec2char,
                                    char2id, id2char, flatten)
@@ -363,8 +360,8 @@ class Lstm(Model):
                 l2_loss = self._l2_loss(self._output_matrices[:-1])
                 self.loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=self.labels, logits=logits))
                 self.learning_rate = tf.placeholder(tf.float32, name='learning_rate')
-                optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
-                #optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
+                #optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
+                optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
                 gradients, v = zip(*optimizer.compute_gradients(self.loss + l2_loss))
                 gradients, _ = tf.clip_by_global_norm(gradients, 1.)
                 self.train_op = optimizer.apply_gradients(zip(gradients, v))
