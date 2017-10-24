@@ -115,10 +115,18 @@ class Handler(object):
                  save_to_file=None,
                  save_to_storage=None,
                  print_results=None,
+                 batch_generator_class=None,
+                 vocabulary=None,
+                 # several_launches method specific
                  eval_dataset_names=None,
                  hyperparameters=None,
-                 batch_generator_class=None,
-                 vocabulary=None):
+                 # test method specific
+                 validation_dataset_names=None,
+                 validation_tensor_schedule=None,
+                 printed_result_types=['loss'],
+                 fuses=None,
+                 fuse_tensor_schedule=None,
+                 fuse_file_name=None):
         continuous_chit_chat = ['simple_fontain']
         self._processing_type = processing_type
         self._environment_instance = environment_instance
@@ -169,6 +177,7 @@ class Handler(object):
             self._validation_tensor_schedule = None
 
             self._fuses = None
+            self._print_fuses = True
             self._fuse_file_name = None
             self._fuse_tensor_schedule = None
 
@@ -198,11 +207,34 @@ class Handler(object):
         if self._processing_type == 'test':
             self._name_of_dataset_on_which_accumulating = None
             self._dataset_specific = dict()
-            self._validation_tensor_schedule = None
+            self._validation_tensor_schedule = validation_tensor_schedule
+            self._validation_dataset_names = validation_dataset_names
+            self._switch_datasets(validation_dataset_names=self._validation_dataset_names)
+            self._printed_result_types = printed_result_types
             self._accumulated_tensors = dict()
             self._accumulated = dict(loss=None, perplexity=None, accuracy=None)
             if self._bpc:
                 self._accumulated['bpc'] = None
+            self._fuses = fuses
+            if self._fuses is not None:
+                for fuse in self._fuses:
+                    fuse['results'] = list()
+            if fuse_file_name is not None:
+                self._fuse_file_name = fuse_file_name
+            elif self._fuses is not None and self._save_path is not None:
+                self._fuse_file_name = add_index_to_filename_if_needed(self._save_path + '/fuses.txt')
+            self._fuse_tensor_schedule = fuse_tensor_schedule
+
+            self._processed_fuse_index = None
+
+            if self._print_results is None:
+                self._print_fuses = False
+            else:
+                self._print_fuses = self._print_results
+
+            self._text_is_being_accumulated = False
+            self._accumulated_text = None
+
         if self._processing_type == 'several_launches':
             self._result_types = result_types
             self._eval_dataset_names = eval_dataset_names
@@ -285,6 +317,10 @@ class Handler(object):
             self._save_to_storage = False
         self._print_per_collected = schedule['to_be_collected_while_training']['print_per_collected']
         self._example_per_print = schedule['to_be_collected_while_training']['example_per_print']
+        if self._example_per_print is not None:
+            self._print_fuses = True
+        else:
+            self._print_fuses = False
         self._train_tensor_schedule = schedule['train_tensor_schedule']
         self._validation_tensor_schedule = schedule['validation_tensor_schedule']
         self._printed_controllers = schedule['printed_controllers']
@@ -376,6 +412,7 @@ class Handler(object):
         self._text_is_being_accumulated = True
 
     def stop_text_accumulation(self):
+        print('self._fuses:', self._fuses)
         self._fuses[self._processed_fuse_index]['results'].append(str(self._accumulated_text))
         self._accumulated_text = None
         self._text_is_being_accumulated = False
@@ -418,7 +455,7 @@ class Handler(object):
             fuse['results'] = list()
 
     def dispense_fuse_results(self, training_step):
-        if self._example_per_print is not None:
+        if self._print_fuses:
             self._print_fuse_results(training_step)
         if self._save_path is not None:
             self._save_fuse_results(training_step)
@@ -1127,19 +1164,20 @@ class Environment(object):
                            'visible_device_list': ""},
             start_specs={'restore_path': None,
                          'save_path': None,
+                         'print_results': True,
                          'result_types': self.put_result_types_in_correct_order(
                              ['loss', 'perplexity', 'accuracy']),
                          'batch_generator_class': self._default_batch_generator,
                          'vocabulary': self._vocabulary},
-            work=dict(additions_to_feed_dict=None,
+            work=dict(additions_to_feed_dict=dict(),
                       debug=None,
                       validation_datasets=None,
                       validation_batch_size=1,
                       valid_batch_kwargs=dict(),
-                      no_validation=False,
                       printed_result_types=self.put_result_types_in_correct_order(['loss']),
                       fuses=None,
                       fuse_tensors=construct(fuse_tensors),
+                      fuse_file_name=None,
                       replicas=None,
                       random={'number_of_runs': 5,
                               'length': 80},
@@ -1277,10 +1315,21 @@ class Environment(object):
         """update is a dictionary which should match keys of self._pupil_default_training"""
         self._update_dict(self._default_train_method_args, update)
 
+    @property
+    def default_test_method_args(self):
+        return construct(self._default_test_method_args)
+
+    @default_test_method_args.setter
+    def default_test_method_args(self, update):
+        """update is a dictionary which should match keys of self._pupil_default_training"""
+        self._update_dict(self._default_test_method_args, update)
+
     def get_default_method_parameters(self,
                                       method_name):
         if method_name == 'train':
             return self.default_train_method_args
+        if method_name == 'test':
+            return self.default_test_method_args
         return None
 
     def _start_session(self, allow_soft_placement, log_device_placement, gpu_memory, visible_device_list):
@@ -1327,12 +1376,63 @@ class Environment(object):
         elif model_type == 'assistant':
             self._assistant_hooks['saver'].save(self._session, path)
 
+    def _initialize_pupil(self, restore_path):
+        if restore_path is not None:
+            self._pupil_hooks['saver'].restore(self._session, restore_path)
+        else:
+            self._session.run(tf.global_variables_initializer())
+
     def test(self,
-             restore_path=None,
-             save_path=None,
-             result_types=['loss', 'bpc', 'perplexity', 'accuracy'],
-             fuses=None):
-        pass
+             **kwargs):
+        tmp_output = self._parse_1_set_of_kwargs(kwargs,
+                                                 'test',
+                                                 None,
+                                                 False)
+        all_tensor_aliases = self._all_tensor_aliases_from_test_method_arguments(tmp_output)
+        print('all_tensor_aliases:', all_tensor_aliases)
+        self._create_missing_hooks(all_tensor_aliases)
+        session_specs = tmp_output['session_specs']
+        start_specs = tmp_output['start_specs']
+        work = tmp_output['work']
+        dataset_names = [dataset[1] for dataset in work['validation_datasets']]
+        print("work['fuses']:", work['fuses'])
+        self._start_session(session_specs['allow_soft_placement'],
+                            session_specs['log_device_placement'],
+                            session_specs['gpu_memory'],
+                            session_specs['visible_device_list'])
+        self._initialize_pupil(start_specs['restore_path'])
+        add_feed_dict = dict()
+        for tensor_alias, value in work['additions_to_feed_dict'].items():
+            add_feed_dict[self._pupil_hooks[tensor_alias]] = value
+        batch_generator_class = start_specs['batch_generator_class']
+        self._handler = Handler(self,
+                                self._pupil_hooks,
+                                'test',
+                                start_specs['save_path'],
+                                start_specs['result_types'],
+                                save_to_file=True,
+                                save_to_storage=True,
+                                print_results=start_specs['print_results'],
+                                batch_generator_class=batch_generator_class,
+                                vocabulary=start_specs['vocabulary'],
+                                validation_dataset_names=dataset_names,
+                                validation_tensor_schedule=work['validation_tensor_schedule'],
+                                fuses=work['fuses'],
+                                fuse_tensor_schedule=work['fuse_tensors'],
+                                fuse_file_name=work['fuse_file_name'])
+
+        empty_batch_gen = batch_generator_class('', 1, vocabulary=start_specs['vocabulary'])
+        self._on_fuses(empty_batch_gen,
+                       work['fuses'],
+                       additional_feed_dict=add_feed_dict)
+
+        validation_datasets = work['validation_datasets']
+        for validation_dataset in validation_datasets:
+            _ = self._validate(batch_generator_class,
+                               validation_dataset,
+                               work['validation_batch_size'],
+                               work['valid_batch_kwargs'],
+                               additional_feed_dict=add_feed_dict)
 
     def _on_fuses(self,
                   batch_generator,
@@ -1390,6 +1490,7 @@ class Environment(object):
                   save_to_file=None,
                   save_to_storage=None,
                   print_results=None):
+        # print('valid_batch_kwargs:', valid_batch_kwargs)
         if 'reset_validation_state' in self._pupil_hooks:
             self._session.run(self._pupil_hooks['reset_validation_state'])
         #print('batch_generator_class:', batch_generator_class)
@@ -1399,16 +1500,16 @@ class Environment(object):
         step = 0
         self._handler.start_accumulation(validation_dataset[1], training_step=training_step)
         while step < length:
-
             validation_operations = self._handler.get_tensors('validation', step)
             feed_dict = {self._pupil_hooks['validation_inputs']: inputs,
                          self._pupil_hooks['validation_labels']: labels}
             if additional_feed_dict is not None:
-                feed_dict = dict(feed_dict.items(), additional_feed_dict.items())
+                feed_dict.update(additional_feed_dict)
             valid_res = self._session.run(validation_operations, feed_dict=feed_dict)
             self._handler.process_results(training_step, valid_res, regime='validation')
             step += 1
             inputs, labels = valid_batches.next()
+
         means = self._handler.stop_accumulation(save_to_file=save_to_file,
                                                 save_to_storage=save_to_storage,
                                                 print_results=print_results)
@@ -1438,7 +1539,7 @@ class Environment(object):
                                    not run_specs['train_specs']['no_validation']
         return validation_is_needed
 
-    def _all_tensor_aliases_from_arguments(self, args_for_launches, evaluation=None):
+    def _all_tensor_aliases_from_train_method_arguments(self, args_for_launches, evaluation=None):
         start_specs_for_launches, run_specs_for_launches = zip(*args_for_launches)
         list_of_required_tensors_aliases = list()
         result_types_for_launches = list()
@@ -1461,6 +1562,28 @@ class Environment(object):
                     alias = 'validation_' + result_type
                     if alias not in list_of_required_tensors_aliases:
                         list_of_required_tensors_aliases.append(alias)
+        return list_of_required_tensors_aliases
+
+    @staticmethod
+    def _tensor_aliases_from_schedule(schedule):
+        tensor_aliases = list()
+        for _, schedule in schedule.items():
+            aliases = list(schedule.keys())
+            tensor_aliases = add_missing_to_list(tensor_aliases, aliases)
+        return tensor_aliases
+
+    def _all_tensor_aliases_from_test_method_arguments(self, args):
+        start_specs = args['start_specs']
+        work = args['work']
+        list_of_required_tensors_aliases = list()
+        for res_type in start_specs['result_types']:
+            list_of_required_tensors_aliases.append('validation_' + res_type)
+        list_of_required_tensors_aliases = add_missing_to_list(
+            list_of_required_tensors_aliases,
+            self._tensor_aliases_from_schedule(work['fuse_tensors']))
+        list_of_required_tensors_aliases = add_missing_to_list(
+            list_of_required_tensors_aliases,
+            self._tensor_aliases_from_schedule(work['validation_tensor_schedule']))
         return list_of_required_tensors_aliases
 
     def _create_missing_hooks(self, list_of_tensor_aliases, model_type='pupil'):
@@ -1696,7 +1819,7 @@ class Environment(object):
             self._set_controller_name_in_specs(new_value, 'debug')
         return new_value
 
-    def _process_abbreviations(self, set_of_kwargs):
+    def _process_abbreviations(self, set_of_kwargs, method_name):
         for key, value in set_of_kwargs.items():
             value = self._process_abbreviation_in_1_entry(key, value)
             set_of_kwargs[key] = value
@@ -1715,7 +1838,7 @@ class Environment(object):
             else:
                 set_of_kwargs['summary'] = False
         self._process_datasets_shortcuts(set_of_kwargs)
-        self._process_batch_kwargs_shortcuts(set_of_kwargs)
+        self._process_batch_kwargs_shortcuts(set_of_kwargs, method_name)
 
     def _process_abbreviations_in_hyperparameters_set(self, set):
         for key, values in set.items():
@@ -1726,19 +1849,32 @@ class Environment(object):
             set[key] = new_values
         return set
 
-    def _process_batch_kwargs_shortcuts(self, set_of_kwargs):
-        if 'train_batch_kwargs' not in set_of_kwargs:
-            set_of_kwargs['train_batch_kwargs'] = dict()
-            if 'num_unrollings' in set_of_kwargs:
-                set_of_kwargs['train_batch_kwargs']['num_unrollings'] = set_of_kwargs['num_unrollings']
-                if 'valid_batch_kwargs' not in set_of_kwargs:
+    def _process_batch_kwargs_shortcuts(self, set_of_kwargs, method_name):
+        if method_name == 'train':
+            if 'train_batch_kwargs' not in set_of_kwargs:
+                set_of_kwargs['train_batch_kwargs'] = dict()
+                if 'num_unrollings' in set_of_kwargs:
+                    set_of_kwargs['train_batch_kwargs']['num_unrollings'] = set_of_kwargs['num_unrollings']
+                    del set_of_kwargs['num_unrollings']
+                if 'vocabulary' in set_of_kwargs:
+                    set_of_kwargs['train_batch_kwargs']['vocabulary'] = set_of_kwargs['vocabulary']
+                    del set_of_kwargs['vocabulary']
+            if 'valid_batch_kwargs' not in set_of_kwargs:
+                set_of_kwargs['valid_batch_kwargs'] = dict()
+                if 'num_unrollings' in set_of_kwargs['train_batch_kwargs']:
                     set_of_kwargs['valid_batch_kwargs'] = {'num_unrollings': 1}
-                del set_of_kwargs['num_unrollings']
-            if 'vocabulary' in set_of_kwargs:
-                set_of_kwargs['train_batch_kwargs']['vocabulary'] = set_of_kwargs['vocabulary']
-                if 'vocabulary' not in set_of_kwargs['valid_batch_kwargs']:
-                    set_of_kwargs['valid_batch_kwargs']['vocabulary'] = set_of_kwargs['vocabulary']
-                del set_of_kwargs['vocabulary']
+                if 'vocabulary' in set_of_kwargs['train_batch_kwargs']:
+                    set_of_kwargs['valid_batch_kwargs']['vocabulary'] = list(
+                        set_of_kwargs['train_batch_kwargs']['vocabulary'])
+        if method_name == 'test':
+            if 'valid_batch_kwargs' not in set_of_kwargs:
+                set_of_kwargs['valid_batch_kwargs'] = dict()
+                if 'num_unrollings' in set_of_kwargs:
+                    set_of_kwargs['valid_batch_kwargs']['num_unrollings'] = {'num_unrollings': 1}
+                    del set_of_kwargs['num_unrollings']
+                if 'vocabulary' in set_of_kwargs:
+                    set_of_kwargs['valid_batch_kwargs']['vocabulary'] = list(set_of_kwargs['vocabulary'])
+                    del set_of_kwargs['vocabulary']
 
     def _process_datasets_shortcuts(self,
                                     set_of_kwargs):
@@ -1829,7 +1965,7 @@ class Environment(object):
         #       method_name, '\nrepeated_key:\n', repeated_key, '\nonly_repeated:\n', only_repeated, '\nold_arguments:\n',
         #       old_arguments)
         kwargs_to_parse = construct(kwargs_to_parse)
-        self._process_abbreviations(kwargs_to_parse)
+        self._process_abbreviations(kwargs_to_parse, method_name)
         if old_arguments is None:
             if only_repeated:
                 tmp = self.get_default_method_parameters(method_name)
@@ -1994,7 +2130,7 @@ class Environment(object):
         session_specs = tmp_output['session_specs']
         start_specs = tmp_output['start_specs']
         run_specs_set = tmp_output['run']
-        all_tensor_aliases = self._all_tensor_aliases_from_arguments([(start_specs, run_specs_set)])
+        all_tensor_aliases = self._all_tensor_aliases_from_train_method_arguments([(start_specs, run_specs_set)])
         self._create_missing_hooks(all_tensor_aliases)
 
         if start_session:
@@ -2009,10 +2145,7 @@ class Environment(object):
     def _train_repeatedly(self, start_specs, run_specs_set):
         # initializing model
         self.flush_storage()
-        if start_specs['restore_path'] is not None:
-            self._pupil_hooks['saver'].restore(self._session, start_specs['restore_path'])
-        else:
-            self._session.run(tf.global_variables_initializer())
+        self._initialize_pupil(start_specs['restore_path'])
 
         # print('start_specs:', start_specs)
 
@@ -2049,7 +2182,7 @@ class Environment(object):
 
         self._build(kwargs_for_building)
         #print('args_for_launches:', args_for_launches)
-        all_tensor_aliases = self._all_tensor_aliases_from_arguments(args_for_launches, evaluation=evaluation)
+        all_tensor_aliases = self._all_tensor_aliases_from_train_method_arguments(args_for_launches, evaluation=evaluation)
         #print('all_tensor_aliases:', all_tensor_aliases)
         self._create_missing_hooks(all_tensor_aliases)
         self._start_session(session_specs['allow_soft_placement'],
@@ -2214,7 +2347,7 @@ class Environment(object):
                     print_and_log('Human: ' + human_replica, _print=False, fd=fd)
                     for char in human_replica:
                         feed = batch_generator_class.char2vec(char, characters_positions_in_vocabulary)
-                        #print('feed.shape:', feed.shape)
+                        # print('feed.shape:', feed.shape)
                         _ = sample_prediction.eval({sample_input: feed})
                 feed = batch_generator_class.char2vec('\n', characters_positions_in_vocabulary)
                 prediction = sample_prediction.eval({sample_input: feed})
