@@ -355,3 +355,51 @@ def print_and_log(*inputs, log=True, _print=True, fd=None):
         for inp in inputs:
             fd.write(str(inp))
         fd.write('\n')
+
+
+def apply_temperature(array, axis, temperature):
+    array = np.power(array, 1/temperature)
+    norm = np.sum(array, axis=axis, keepdims=True)
+    return array / norm
+
+
+def compute_num_of_repeats(start_axis, last_axis_plus_1, removed_axis, shape):
+    num_of_repeats = 1
+    for ax_num in range(start_axis, last_axis_plus_1):
+        if ax_num != removed_axis:
+            num_of_repeats *= shape[ax_num]
+    return num_of_repeats
+
+
+def construct_indices(constructed_axis, removed_axis, shape):
+    num_one_value_repeats = compute_num_of_repeats(constructed_axis+1, len(shape), removed_axis, shape)
+    num_pattern_repeats = compute_num_of_repeats(0, constructed_axis, removed_axis, shape)
+    pattern = list()
+    for i in range(shape[constructed_axis]):
+        pattern.extend([i] * num_one_value_repeats)
+    pattern = pattern * num_pattern_repeats
+    return np.array(pattern)
+
+
+def sample(array, axis):
+    shape = array.shape
+    if axis == -1:
+        axis = len(shape) - 1
+    c = array.cumsum(axis=axis)
+    r_shape = list(shape)
+    r_shape[axis] = 1
+    r = np.random.rand(*r_shape)
+    mask = (r < c).argmax(axis)
+    axis_indices = np.reshape(mask, (-1))
+    all_indices = list()
+    for ax_num in range(len(shape)):
+        if ax_num != axis:
+            all_indices.append(construct_indices(ax_num, axis, shape))
+        else:
+            all_indices.append(axis_indices)
+    answer = np.zeros(shape)
+    for ax_num in range(len(shape)):
+        exec("i%s = all_indices[%s]" % (ax_num, ax_num))
+    init_string = ('answer[' + 'i%s' + ', i%s'*(len(shape)-1) + '] = 1.') % tuple([i for i in range(len(shape))])
+    exec(init_string)
+    return answer
