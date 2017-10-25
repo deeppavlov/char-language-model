@@ -2456,7 +2456,7 @@ class Environment(object):
         generated_text = ''
         for fuse_res in fuse_results:
             for phrase_idx, phrase in enumerate(fuse_res['results']):
-                phrase = re.sub('\t', '', phrase)
+                phrase = re.sub("[\t\n]+", '', phrase)
                 generated_fd.write(phrase[1:])
                 generated_text += phrase[1:]
                 # print('phrase_idx:', phrase_idx, 'length:', len(phrase))
