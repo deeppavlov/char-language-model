@@ -1450,34 +1450,38 @@ class Environment(object):
                     self._session.run(self._pupil_hooks['randomize_sample_state'])
                 elif 'reset_validation_state' in self._pupil_hooks:
                     self._session.run(self._pupil_hooks['reset_validation_state'])
+                # print("fuse['text']:", [fuse['text']])
                 for char_idx, char in enumerate(fuse['text']):
                     vec = batch_generator.char2vec(char, batch_generator.characters_positions_in_vocabulary)
                     feed_dict = {self._pupil_hooks['validation_inputs']: vec}
                     feed_dict.update(additional_feed_dict)
                     fuse_operations = self._handler.get_tensors('fuse', char_idx)
                     fuse_res = self._session.run(fuse_operations, feed_dict=feed_dict)
+                    if char_idx == len(fuse['text']) - 1 and fuse['max_num_of_chars'] > 0:
+                        self._handler.start_text_accumulation()
                     self._handler.process_results(char_idx, fuse_res, regime='fuse')
-                self._handler.start_text_accumulation()
+                # self._handler.start_text_accumulation()
                 if fuse['fuse_stop'] == 'limit':
-                    for char_idx in range(len(fuse['text']), len(fuse['text']) + fuse['max_num_of_chars'] ):
+                    for char_idx in range(len(fuse['text']), len(fuse['text']) + fuse['max_num_of_chars'] - 1):
                         vec = batch_generator.pred2vec(fuse_res[0])
                         feed_dict = {self._pupil_hooks['validation_inputs']: vec}
                         feed_dict.update(additional_feed_dict)
                         fuse_operations = self._handler.get_tensors('fuse', char_idx)
                         fuse_res = self._session.run(fuse_operations, feed_dict=feed_dict)
                         self._handler.process_results(char_idx, fuse_res, regime='fuse')
-                if fuse['fuse_stop'] == 'new_line':
+                elif fuse['fuse_stop'] == 'new_line':
                     char = None
                     counter = 0
                     char_idx = len(fuse['text'])
-                    while char != '\n' and counter < fuse['max_num_of_chars']:
+                    while char != '\n' and counter < fuse['max_num_of_chars'] - 1:
                         vec = batch_generator.pred2vec(fuse_res[0])
                         feed_dict = {self._pupil_hooks['validation_inputs']: vec}
                         feed_dict.update(additional_feed_dict)
                         fuse_operations = self._handler.get_tensors('fuse', char_idx)
                         fuse_res = self._session.run(fuse_operations, feed_dict=feed_dict)
                         self._handler.process_results(char_idx, fuse_res, regime='fuse')
-                        char = batch_generator.vec2char(fuse_res[0], batch_generator.vocabulary)
+                        char = batch_generator.vec2char(fuse_res[0], batch_generator.vocabulary)[0]
+                        # print('char:', char)
                         counter += 1
                         char_idx += 1
                 self._handler.stop_text_accumulation()
@@ -2433,7 +2437,7 @@ class Environment(object):
         correct_answers_fd = open(add_index_to_filename_if_needed(save_path + '/correct.txt'), 'w', encoding='utf-8')
         fuses = list()
         for replica, answer in zip(used_replicas, used_answers):
-            fuses.append({'text': replica, 'num_repeats': num_repeats,
+            fuses.append({'text': replica + '\n', 'num_repeats': num_repeats,
                           'max_num_of_chars': gen_max_length, 'fuse_stop': fuse_stop})
             fuses_fd.write(replica + '\n')
             correct_answers_fd.write(answer + '\n')
@@ -2467,6 +2471,7 @@ class Environment(object):
         # fd = open(save_path + '/generated.txt', 'r', encoding='utf-8')
         # file_text = fd.read()
         # print('file_text:', file_text)
+
         # print('generated_text:', generated_text)
 
 
