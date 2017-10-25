@@ -1,6 +1,7 @@
 import os
 import pickle
 import numpy as np
+import re
 import multiprocessing as mp
 import tensorflow as tf
 from tensorflow.python import debug as tf_debug
@@ -412,7 +413,7 @@ class Handler(object):
         self._text_is_being_accumulated = True
 
     def stop_text_accumulation(self):
-        print('self._fuses:', self._fuses)
+        # print('self._fuses:', self._fuses)
         self._fuses[self._processed_fuse_index]['results'].append(str(self._accumulated_text))
         self._accumulated_text = None
         self._text_is_being_accumulated = False
@@ -459,8 +460,10 @@ class Handler(object):
             self._print_fuse_results(training_step)
         if self._save_path is not None:
             self._save_fuse_results(training_step)
+        res = construct(self._fuses)
         for fuse in self._fuses:
             fuse['results'] = list()
+        return res
 
     def _process_validation_results(self,
                                     step,
@@ -1395,7 +1398,7 @@ class Environment(object):
         start_specs = tmp_output['start_specs']
         work = tmp_output['work']
         dataset_names = [dataset[1] for dataset in work['validation_datasets']]
-        print("work['fuses']:", work['fuses'])
+        # print("work['fuses']:", work['fuses'])
         self._start_session(session_specs['allow_soft_placement'],
                             session_specs['log_device_placement'],
                             session_specs['gpu_memory'],
@@ -1422,9 +1425,9 @@ class Environment(object):
                                 fuse_file_name=work['fuse_file_name'])
 
         empty_batch_gen = batch_generator_class('', 1, vocabulary=start_specs['vocabulary'])
-        self._on_fuses(empty_batch_gen,
-                       work['fuses'],
-                       additional_feed_dict=add_feed_dict)
+        fuse_res = self._on_fuses(empty_batch_gen,
+                                  work['fuses'],
+                                  additional_feed_dict=add_feed_dict)
 
         validation_datasets = work['validation_datasets']
         for validation_dataset in validation_datasets:
@@ -1433,6 +1436,7 @@ class Environment(object):
                                work['validation_batch_size'],
                                work['valid_batch_kwargs'],
                                additional_feed_dict=add_feed_dict)
+        return fuse_res
 
     def _on_fuses(self,
                   batch_generator,
@@ -1478,7 +1482,8 @@ class Environment(object):
                         char_idx += 1
                 self._handler.stop_text_accumulation()
             self._handler.set_processed_fuse_index(None)
-        self._handler.dispense_fuse_results(training_step)
+        res = self._handler.dispense_fuse_results(training_step)
+        return res
 
     def _validate(self,
                   batch_generator_class,
@@ -1773,10 +1778,10 @@ class Environment(object):
                     for addition, add_controller in zip(train_feed_dict_additions, additional_controllers):
                         valid_add_feed_dict[self._pupil_hooks[addition['placeholder']]] = add_controller.get()
                 if schedule['fuses'] is not None:
-                    self._on_fuses(train_batches,
-                                   schedule['fuses'],
-                                   training_step=step,
-                                   additional_feed_dict=valid_add_feed_dict)
+                    _ = self._on_fuses(train_batches,
+                                       schedule['fuses'],
+                                       training_step=step,
+                                       additional_feed_dict=valid_add_feed_dict)
             step += 1
             self.set_in_storage(step=step)
         return step
@@ -2358,7 +2363,7 @@ class Environment(object):
                 char = None
                 bot_replica = ""
                 # print('ord(\'\\n\'):', ord('\n'))
-                while char != '\n' and counter < 10:
+                while char != '\n' and counter < 500:
                     feed = batch_generator_class.pred2vec(prediction)
                     # print('prediction after sampling:', prediction)
                     # print('feed:', feed)
@@ -2381,3 +2386,88 @@ class Environment(object):
                 human_replica = input('Human: ')
             fd.write('\n*********************')
             fd.close()
+
+    def generate_discriminator_dataset(self,
+                                       num_examples,
+                                       num_repeats,
+                                       dataset_text,
+                                       gen_max_length,
+                                       fuse_stop,
+                                       restore_path,
+                                       save_path,
+                                       vocabulary=None,
+                                       additions_to_feed_dict=dict()):
+        if vocabulary is None and self._vocabulary is None:
+            raise InvalidArgumentError(
+                'Vocabulary has to be provided either to Environment constructor' +
+                ' or to generate_discriminator_dataset method')
+        elif vocabulary is None:
+            vocabulary = self._vocabulary
+
+        all_phrases = dataset_text.split('\n')[1:-1]
+        # print('dataset_text:', dataset_text)
+        # print('all_phrases:', all_phrases)
+        replicas = all_phrases[:-1]
+        answers = all_phrases[1:]
+        num_replicas = len(replicas)
+        # print('num_replicas:', num_replicas)
+        interval = num_replicas // num_examples
+        # print('interval:', interval)
+        used_replicas = list()
+        used_answers = list()
+        # for replica in replicas:
+        #     print('ord(replica[-1])', ord(replica[-1]))
+        if interval == 0:
+            for replica, answer in zip(replicas, answers):
+                used_replicas.append(replica[1:])
+                used_answers.append(answer[1:])
+        else:
+            for i in range(num_examples):
+                # print('ord(replicas[-1])', ord(replicas[-1]))
+                used_replicas.append(replicas[i*interval][1:])
+                used_answers.append(answers[i*interval][1:])
+        # print('used_replicas:', used_replicas)
+        # print('used_answers:', used_answers)
+        create_path(save_path, False)
+        fuses_fd = open(add_index_to_filename_if_needed(save_path + '/fuses.txt'), 'w', encoding='utf-8')
+        correct_answers_fd = open(add_index_to_filename_if_needed(save_path + '/correct.txt'), 'w', encoding='utf-8')
+        fuses = list()
+        for replica, answer in zip(used_replicas, used_answers):
+            fuses.append({'text': replica, 'num_repeats': num_repeats,
+                          'max_num_of_chars': gen_max_length, 'fuse_stop': fuse_stop})
+            fuses_fd.write(replica + '\n')
+            correct_answers_fd.write(answer + '\n')
+        fuses_fd.close()
+        correct_answers_fd.close()
+
+        fuse_results = self.test(restore_path=restore_path,
+                                 print_results=False,
+                                 vocabulary=vocabulary,
+                                 additions_to_feed_dict=additions_to_feed_dict,
+                                 printed_result_types=None,
+                                 fuses=fuses,
+                                 random=None)
+
+        generated_fd = open(add_index_to_filename_if_needed(save_path + '/generated.txt'), 'w')
+        generated_text = ''
+        for fuse_res in fuse_results:
+            for phrase_idx, phrase in enumerate(fuse_res['results']):
+                phrase = re.sub('\t', '', phrase)
+                generated_fd.write(phrase[1:])
+                generated_text += phrase[1:]
+                # print('phrase_idx:', phrase_idx, 'length:', len(phrase))
+                if phrase_idx < len(fuse_res['results']) - 1:
+                    # print('phrase_idx:', phrase_idx)
+                    generated_text += '\t'
+                    num_chars = generated_fd.write("\t")
+                    # print('num_chars:', num_chars)
+            generated_fd.write('\n')
+            generated_text += '\n'
+        generated_fd.close()
+        # fd = open(save_path + '/generated.txt', 'r', encoding='utf-8')
+        # file_text = fd.read()
+        # print('file_text:', file_text)
+        # print('generated_text:', generated_text)
+
+
+

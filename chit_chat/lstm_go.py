@@ -193,7 +193,7 @@ class Lstm(Model):
     def _output_module(self, all_hidden_states):
         with tf.name_scope('output_module'):
 
-            print('all_hidden_states:', all_hidden_states)
+            # print('all_hidden_states:', all_hidden_states)
             hidden_by_layer = zip(*all_hidden_states)
             concatenated_along_time_dim = list()
             for layer_idx, layer_hidden in enumerate(hidden_by_layer):
