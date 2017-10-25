@@ -1,11 +1,8 @@
 from __future__ import print_function
 import numpy as np
 import tensorflow as tf
-import zipfile
-import codecs
-import os
 from some_useful_functions import (construct, create_vocabulary,
-                                   get_positions_in_vocabulary, char2vec,
+                                   get_positions_in_vocabulary, char2vec, pred2vec, vec2char,
                                    char2id, id2char, flatten)
 
 
@@ -21,13 +18,25 @@ class LstmBatchGenerator(object):
             text += t
         return create_vocabulary(text)
 
+    @staticmethod
+    def char2vec(char, characters_positions_in_vocabulary):
+        return np.reshape(char2vec(char, characters_positions_in_vocabulary), (1, 1, -1))
+
+    @staticmethod
+    def pred2vec(pred):
+        return np.reshape(pred2vec(pred), (1, 1, -1))
+
+    @staticmethod
+    def vec2char(vec, vocabulary):
+        return vec2char(vec, vocabulary)
+
     def __init__(self, text, batch_size, num_unrollings=1, vocabulary=None):
         self._text = text
         self._text_size = len(text)
         self._batch_size = batch_size
-        self._vocabulary = vocabulary
-        self._vocabulary_size = len(self._vocabulary)
-        self._characters_positions_in_vocabulary = get_positions_in_vocabulary(self._vocabulary)
+        self.vocabulary = vocabulary
+        self._vocabulary_size = len(self.vocabulary)
+        self.characters_positions_in_vocabulary = get_positions_in_vocabulary(self.vocabulary)
         self._num_unrollings = num_unrollings
         segment = self._text_size // batch_size
         self._cursor = [offset * segment for offset in range(batch_size)]
@@ -42,7 +51,7 @@ class LstmBatchGenerator(object):
     def _start_batch(self):
         batch = np.zeros(shape=(self._batch_size, self._vocabulary_size), dtype=np.float)
         for b in range(self._batch_size):
-            batch[b, char2id('\n', self._characters_positions_in_vocabulary)] = 1.0
+            batch[b, char2id('\n', self.characters_positions_in_vocabulary)] = 1.0
         return batch
 
     def _zero_batch(self):
@@ -52,18 +61,18 @@ class LstmBatchGenerator(object):
         """Generate a single batch from the current cursor position in the data."""
         batch = np.zeros(shape=(self._batch_size, self._vocabulary_size), dtype=np.float)
         for b in range(self._batch_size):
-            batch[b, char2id(self._text[self._cursor[b]], self._characters_positions_in_vocabulary)] = 1.0
+            batch[b, char2id(self._text[self._cursor[b]], self.characters_positions_in_vocabulary)] = 1.0
             self._cursor[b] = (self._cursor[b] + 1) % self._text_size
         return batch
 
-    def char2vec(self, char):
-        return np.stack(char2vec(char, self._characters_positions_in_vocabulary)), np.stack(self._zero_batch())
+    def char2batch(self, char):
+        return np.stack(char2vec(char, self.characters_positions_in_vocabulary)), np.stack(self._zero_batch())
 
-    def pred2vec(self, pred):
+    def pred2batch(self, pred):
         batch = np.zeros(shape=(self._batch_size, self._vocabulary_size), dtype=np.float)
         char_id = np.argmax(pred, 1)[-1]
         batch[0, char_id] = 1.0
-        return batch, self._zero_batch()
+        return np.stack([batch]), np.stack([self._zero_batch()])
 
     def next(self):
         """Generate the next array of batches from the data. The array consists of
@@ -184,7 +193,7 @@ class Lstm(Model):
     def _output_module(self, all_hidden_states):
         with tf.name_scope('output_module'):
 
-            print('all_hidden_states:', all_hidden_states)
+            # print('all_hidden_states:', all_hidden_states)
             hidden_by_layer = zip(*all_hidden_states)
             concatenated_along_time_dim = list()
             for layer_idx, layer_hidden in enumerate(hidden_by_layer):
@@ -372,8 +381,8 @@ class Lstm(Model):
                 l2_loss = self._l2_loss(self._output_matrices[:-1])
                 self.loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=self.labels, logits=logits))
                 self.learning_rate = tf.placeholder(tf.float32, name='learning_rate')
-                optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
-                #optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
+                #optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
+                optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
                 gradients, v = zip(*optimizer.compute_gradients(self.loss + l2_loss))
                 gradients, _ = tf.clip_by_global_norm(gradients, 1.)
                 self.train_op = optimizer.apply_gradients(zip(gradients, v))
