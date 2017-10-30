@@ -1527,9 +1527,6 @@ class Environment(object):
     def _from_random_fuse(self):
         pass
 
-    def _from_fuses(self):
-        pass
-
     def _on_replicas(self):
         pass
 
@@ -1814,7 +1811,7 @@ class Environment(object):
             if isinstance(value, list):
                 new_value = {'type': 'true_on_steps', 'steps': value}
             elif isinstance(value, int):
-                new_value = {'type': 'periodic_truth', 'steps': value}
+                new_value = {'type': 'periodic_truth', 'period': value}
             else:
                 new_value = {'type': 'always_false'}
             self._set_controller_name_in_specs(new_value, 'checkpoint_steps')
