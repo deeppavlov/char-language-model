@@ -412,7 +412,7 @@ class Lstm(Model):
                 grads, v = zip(*grads_and_vars)
                 grads, _ = tf.clip_by_global_norm(grads, 1.)
                 self.train_op = optimizer.apply_gradients(zip(grads, v))
-                self.predictions = tf.nn.softmax(tf.concat(preds, 0))
+                self.predictions = tf.concat(preds, 0)
                 l = 0
                 for loss, gpu_batch_size in zip(losses, self._batch_sizes_on_gpus):
                     l += float(gpu_batch_size) / float(self._batch_size) * loss
