@@ -406,7 +406,10 @@ class Lstm(Model):
                             optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
                             grads_and_vars = optimizer.compute_gradients(loss + l2_loss)
                             tower_grads.append(grads_and_vars)
-                            preds.append(tf.nn.softmax(logits))
+
+                            # splitting concatenated results for different characters
+                            concat_pred = tf.nn.softmax(logits)
+                            preds.append(tf.split(concat_pred, self._num_unrollings))
 
         with tf.device('/cpu:0'):
             with tf.name_scope(device_name_scope('/cpu:0') + '_gradients'):
@@ -414,7 +417,16 @@ class Lstm(Model):
                 grads, v = zip(*grads_and_vars)
                 grads, _ = tf.clip_by_global_norm(grads, 1.)
                 self.train_op = optimizer.apply_gradients(zip(grads, v))
-                self.predictions = tf.concat(preds, 0)
+
+                # composing predictions
+                preds_by_char = list()
+                # print('preds:', preds)
+                for one_char_preds in zip(*preds):
+                    # print('one_char_preds:', one_char_preds)
+                    preds_by_char.append(tf.concat(one_char_preds, 0))
+                # print('len(preds_by_char):', len(preds_by_char))
+                self.predictions = tf.concat(preds_by_char, 0)
+                # print('self.predictions.get_shape().as_list():', self.predictions.get_shape().as_list())
                 l = 0
                 for loss, gpu_batch_size in zip(losses, self._batch_sizes_on_gpus):
                     l += float(gpu_batch_size) / float(self._batch_size) * loss
