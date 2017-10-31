@@ -406,7 +406,11 @@ class Lstm(Model):
 
                         save_ops = self._compose_save_list((saved_states, all_states))
                         with tf.control_dependencies(save_ops):
-                            l2_loss = self._l2_loss(self._output_matrices[:-1])
+                            all_matrices = [self._embedding_matrix]
+                            all_matrices.extend(self._lstm_matrices)
+                            all_matrices.extend(self._output_matrices)
+                            all_matrices.append(self._output_gates_matrix)
+                            l2_loss = self._l2_loss(all_matrices)
                             loss = tf.reduce_mean(
                                 tf.nn.softmax_cross_entropy_with_logits(labels=device_labels, logits=logits))
                             losses.append(loss)
