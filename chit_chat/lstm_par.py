@@ -305,6 +305,11 @@ class Lstm(Model):
         self._num_unrollings = num_unrollings
         self._init_parameter = init_parameter
 
+        gpu_names = get_available_gpus()
+        num_available_gpus = len(gpu_names)
+        if num_available_gpus < gpu_num:
+            print("Can't build model on %s gpus: only %s gpus are available.\n\tFalling to %s gpus" %
+                  (gpu_num, num_available_gpus, num_available_gpus))
         self._batch_sizes_on_gpus = list()
         if gpu_num > batch_size:
             self._gpu_num = batch_size
@@ -365,9 +370,6 @@ class Lstm(Model):
                                                              name='output_matrix_%s' % layer_idx))
                     self._output_biases.append(tf.Variable(tf.zeros([output_dim])))
 
-
-        gpu_names = get_available_gpus()
-
         tower_grads = list()
         preds = list()
         losses = list()
@@ -380,11 +382,11 @@ class Lstm(Model):
                         for layer_idx, layer_num_nodes in enumerate(self._num_nodes):
                             saved_states.append(
                                 (tf.Variable(
-                                     tf.zeros([self._batch_size, layer_num_nodes]),
+                                     tf.zeros([gpu_batch_size, layer_num_nodes]),
                                      trainable=False,
                                      name='saved_state_%s_%s' % (layer_idx, 0)),
                                  tf.Variable(
-                                     tf.zeros([self._batch_size, layer_num_nodes]),
+                                     tf.zeros([gpu_batch_size, layer_num_nodes]),
                                      trainable=False,
                                      name='saved_state_%s_%s' % (layer_idx, 1)))
                             )
