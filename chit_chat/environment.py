@@ -8,7 +8,7 @@ from tensorflow.python import debug as tf_debug
 from some_useful_functions import (construct, add_index_to_filename_if_needed, match_two_dicts, create_path,
                                    paste_into_nested_structure, check_if_key_in_nested_dict,
                                    search_in_nested_dictionary, add_missing_to_list, print_and_log,
-                                   apply_temperature, sample)
+                                   apply_temperature, sample, nested2string)
 
 
 class Controller(object):
@@ -857,6 +857,26 @@ class Handler(object):
             res = args[1]
             self._several_launches_results_processing(hp, res)
 
+    def log_launch(self):
+        if self._save_path is None:
+            print('Warning! Launch is not logged because save_path was provided to Handler constructor')
+        else:
+            with open(add_index_to_filename_if_needed(self._save_path + '/launch_log.txt'), 'w') as f:
+                f.write('launch regime: ' + self._processing_type + '\n' * 2)
+                if self._processing_type == 'train' or self._processing_type == 'test':
+                    f.write('build parameters:\n')
+                    f.write(nested2string(self._environment_instance.current_build_parameters) + '\n' * 2)
+                    f.write('user specified parameters:\n')
+                    f.write(nested2string(self._environment_instance.current_launch_parameters) + '\n' * 2)
+                    f.write('default parameters:\n')
+                    f.write(nested2string(
+                        self._environment_instance.get_default_method_parameters( self._processing_type)) + '\n' * 2)
+                elif self._processing_type == 'several_launches':
+                    f.write('all_parameters:\n')
+                    f.write(nested2string(self._environment_instance.current_launch_parameters) + '\n' * 2)
+                    f.write('train method default parameters:\n')
+                    f.write(nested2string(self._environment_instance.get_default_method_parameters('train')) + '\n' * 2)
+
     def close(self):
         for file in self._train_files.values():
             file.close()
@@ -1193,6 +1213,8 @@ class Environment(object):
         self._handler = None
         self._storage = {'step': None}
         self._collected_result = None
+        self.current_build_parameters = None
+        self.current_launch_parameters = None
 
     def build(self, **kwargs):
         """A method building the graph
@@ -1205,7 +1227,7 @@ class Environment(object):
 
     def _build(self, kwargs):
         self._pupil_class.check_kwargs(**kwargs)
-
+        self.current_build_parameters = kwargs
         # Building the graph
         self._pupil = self._pupil_class(**kwargs)
 
@@ -1387,6 +1409,7 @@ class Environment(object):
 
     def test(self,
              **kwargs):
+        self._store_launch_parameters(kwargs)
         tmp_output = self._parse_1_set_of_kwargs(kwargs,
                                                  'test',
                                                  None,
@@ -1423,7 +1446,7 @@ class Environment(object):
                                 fuses=work['fuses'],
                                 fuse_tensor_schedule=work['fuse_tensors'],
                                 fuse_file_name=work['fuse_file_name'])
-
+        self._handler.log_launch()
         empty_batch_gen = batch_generator_class('', 1, vocabulary=start_specs['vocabulary'])
         fuse_res = self._on_fuses(empty_batch_gen,
                                   work['fuses'],
@@ -2129,6 +2152,11 @@ class Environment(object):
                     be performed and specifying length of generated sequences (not available)
                 train_tensor_schedule: If user wishes he may print or save any tensor in the graph (not available)
                 valid_tensor_schedule: same as train_tensor_schedule"""
+        self._store_launch_parameters(args=args,
+                                      start_session=start_session,
+                                      close_session=close_session,
+                                      set_passed_parameters_as_default=set_passed_parameters_as_default,
+                                      kwargs=kwargs)
         tmp_output = self._parse_train_method_arguments(args,
                                                         kwargs,
                                                         set_passed_parameters_as_default=
@@ -2164,6 +2192,7 @@ class Environment(object):
                                 add_graph_to_summary=start_specs['add_graph_to_summary'],
                                 batch_generator_class=start_specs['batch_generator_class'],
                                 vocabulary=start_specs['vocabulary'])
+        self._handler.log_launch()
         if start_specs['save_path'] is not None:
             checkpoints_path = start_specs['save_path'] + '/checkpoints'
             create_path(checkpoints_path)
@@ -2265,6 +2294,12 @@ class Environment(object):
                          build_hyperparameters=dict(),
                          other_hyperparameters=dict(),
                          **kwargs):
+        self._store_launch_parameters(evaluation=evaluation,
+                                      kwargs_for_building=kwargs_for_building,
+                                      args_for_launches=args_for_launches,
+                                      build_hyperparameters=build_hyperparameters,
+                                      other_hyperparameters=other_hyperparameters,
+                                      kwargs=kwargs)
         tmp_output = self._parse_train_method_arguments([],
                                                         kwargs,
                                                         set_passed_parameters_as_default=False)
@@ -2284,6 +2319,9 @@ class Environment(object):
         #       args_for_launches[0][0]['start_specs']['save_path'])
 
         args_for_launches, hp_values_list, _ = zip(*args_for_launches)
+
+        print('len(args_for_launches):', len(args_for_launches))
+        print('hp_values_list:', hp_values_list)
 
         refactored = list()
         for args in args_for_launches:
@@ -2310,6 +2348,7 @@ class Environment(object):
                 res = queue.get()
                 #print('res:', res)
                 hp.update(build_hp_values)
+                print('\nidx: %s\nres: %s' % (idx, res))
                 self._handler.process_results(hp, res, regime='several_launches')
             p.join()
 
@@ -2471,5 +2510,7 @@ class Environment(object):
 
         # print('generated_text:', generated_text)
 
+    def _store_launch_parameters(self, **kwargs):
+        self.current_launch_parameters = kwargs
 
 

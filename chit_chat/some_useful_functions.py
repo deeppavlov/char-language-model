@@ -5,6 +5,20 @@ import tensorflow as tf
 from tensorflow.python.client import device_lib
 
 
+escape_sequences = ['\\', '\'', '\"', '\a', '\b', '\f', '\n', '\r', '\t', '\v']
+skipped_escape_sequences = ['\\', '\'', '\"']
+escape_sequences_replacements = {'\\': '\\\\',
+                                 '\'': '\\\'',
+                                 '\"': '\\\"',
+                                 '\a': '\\a',
+                                 '\b': '\\b',
+                                 '\f': '\\f',
+                                 '\n': '\\n',
+                                 '\r': '\\r',
+                                 '\t': '\\t',
+                                 '\v': '\\v'}
+
+
 def create_vocabulary(text):
     all_characters = list()
     for char in text:
@@ -453,6 +467,7 @@ def average_gradients(tower_grads):
         average_grads.append(grad_and_var)
     return average_grads
 
+
 def get_num_gpus_and_bs_on_gpus(batch_size, num_gpus, num_available_gpus):
     batch_sizes_on_gpus = list()
     if num_available_gpus < num_gpus:
@@ -475,3 +490,77 @@ def get_num_gpus_and_bs_on_gpus(batch_size, num_gpus, num_available_gpus):
     else:
         batch_sizes_on_gpus = [batch_size]
     return num_gpus, batch_sizes_on_gpus
+
+
+def nested2string(nested, indent=0):
+    string = list()
+    indent = indent
+    return recur_nested_2_string(nested, string, indent)
+    string = ''.join(string)
+    return string
+
+
+def nested2string(nested, indent=0):
+    string = list()
+    indent = indent
+    recur_nested_2_string(nested, string, indent)
+    string = ''.join(string)
+    return string
+
+
+def recur_nested_2_string(nested, string, indent):
+    ind = ' ' * indent
+    if not isinstance(nested, (list, tuple, dict)):
+        if isinstance(nested, str):
+            if len(nested) > 50:
+                string.append('VERY_LONG_STRING')
+            else:
+                string.append('\"' + add_escape_characters(nested) + '\"')
+        else:
+            string.append(str(nested))
+    elif isinstance(nested, dict):
+        string.append('{')
+        if len(nested) > 0:
+            string.append('\n')
+        for idx, (key, value) in enumerate(nested.items()):
+            if isinstance(key, str):
+                string.append(ind + ' ' *4 + '\"' + key + '\"' + ': ')
+            else:
+                string.append(ind + ' ' *4 + str(key) + ': ')
+            recur_nested_2_string(value, string, indent + 4)
+            if idx < len(nested) - 1:
+                string.append(',\n')
+        string.append('}')
+    elif isinstance(nested, list):
+        string.append('[')
+        if len(nested) > 0:
+            string.append('\n')
+        for idx, value in enumerate(nested):
+            string.append(ind + ' ' *4)
+            recur_nested_2_string(value, string, indent + 4)
+            if idx < len(nested) - 1:
+                string.append(',\n')
+        string.append(']')
+
+    elif isinstance(nested, tuple):
+        string.append('(')
+        if len(nested) > 0:
+            string.append('\n')
+        else:
+            string.append(',')
+        for idx, value in enumerate(nested):
+            string.append(ind + ' ' *4)
+            recur_nested_2_string(value, string, indent + 4)
+            if idx < len(nested) - 1:
+                string.append(',\n')
+        string.append(')')
+
+
+def add_escape_characters(string):
+    new_string = ''
+    for char in string:
+        if char in escape_sequences and char not in skipped_escape_sequences:
+            new_string += escape_sequences_replacements[char]
+        else:
+            new_string += char
+    return new_string
