@@ -452,3 +452,26 @@ def average_gradients(tower_grads):
         grad_and_var = (grad, v)
         average_grads.append(grad_and_var)
     return average_grads
+
+def get_num_gpus_and_bs_on_gpus(batch_size, num_gpus, num_available_gpus):
+    batch_sizes_on_gpus = list()
+    if num_available_gpus < num_gpus:
+        print("Can't build model on %s gpus: only %s gpus are available.\n\tFalling to %s gpus" %
+              (num_gpus, num_available_gpus, num_available_gpus))
+        num_gpus = num_available_gpus
+    if num_gpus > batch_size:
+        num_gpus = batch_size
+        print("Can't build model on %s gpus: batch size = %s (batch size is to small).\n\tFalling to %s gpus" %
+              (num_gpus, batch_size, batch_size))
+    else:
+        num_gpus = num_gpus
+    if num_gpus > 1:
+        gpu_batch = batch_size // num_gpus
+        num_remaining_elements = batch_size
+        for _ in range(num_gpus - 1):
+            batch_sizes_on_gpus.append(gpu_batch)
+            num_remaining_elements -= gpu_batch
+        batch_sizes_on_gpus.append(num_remaining_elements)
+    else:
+        batch_sizes_on_gpus = [batch_size]
+    return num_gpus, batch_sizes_on_gpus

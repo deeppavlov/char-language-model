@@ -166,20 +166,23 @@ class Lstm(Model):
     def _rnn_iter(self, embedding, all_states):
         with tf.name_scope('rnn_iter'):
             new_all_states = list()
+            all_hidden_states = list()
             output = embedding
             for layer_idx, state in enumerate(all_states):
                 output, state = self._lstm_layer(output, state, layer_idx)
                 new_all_states.append(state)
-            return output, new_all_states
+                all_hidden_states.append(state[0])
+            return all_hidden_states, new_all_states
 
     def _rnn_module(self, embeddings, all_states):
         rnn_outputs = list()
+        all_hidden_states = list()
         with tf.name_scope('rnn_module'):
             for emb in embeddings:
-                rnn_output, all_states = self._rnn_iter(emb, all_states)
+                hidden_states, all_states = self._rnn_iter(emb, all_states)
                 #print('rnn_output.shape:', rnn_output.get_shape().as_list())
-                rnn_outputs.append(rnn_output)
-        return rnn_outputs, all_states
+                all_hidden_states.append(hidden_states)
+        return all_hidden_states, all_states
 
     def _embed(self, inputs):
         with tf.name_scope('embeddings'):
@@ -188,11 +191,24 @@ class Lstm(Model):
             embeddings = tf.matmul(inputs, self._embedding_matrix, name='embeddings_stacked')
             return tf.split(embeddings, num_unrollings, 0, name='embeddings')
 
-    def _output_module(self, rnn_outputs):
+    def _output_module(self, all_hidden_states):
         with tf.name_scope('output_module'):
-            #print('rnn_outputs:', rnn_outputs)
-            rnn_outputs = tf.concat(rnn_outputs, 0, name='concatenated_rnn_outputs')
-            hs = rnn_outputs
+
+            # print('all_hidden_states:', all_hidden_states)
+            hidden_by_layer = zip(*all_hidden_states)
+            concatenated_along_time_dim = list()
+            for layer_idx, layer_hidden in enumerate(hidden_by_layer):
+                concatenated_along_time_dim.append(tf.concat(layer_hidden, 0, name='hidden_along_time_%s' % layer_idx))
+            full_concat = tf.concat(concatenated_along_time_dim, 1, name='full_concat')
+            gates = tf.sigmoid(tf.matmul(full_concat,
+                                         self._output_gates_matrix,
+                                         name='matmul_in_gates'),
+                               name='gates_concat')
+            gates = tf.split(gates, self._num_layers, axis=1)
+            gated = 0
+            for gate, hidden in zip(gates, concatenated_along_time_dim):
+                gated += gate * hidden
+            hs = gated
             for layer_idx in range(self._num_output_layers):
                 #print('hs.shape:', hs.get_shape().as_list())
                 hs = tf.add(
@@ -243,9 +259,7 @@ class Lstm(Model):
                 shape = variable.get_shape().as_list()
                 name = self._extract_op_name(variable.name)
                 assign_tensor = tf.truncated_normal(shape, stddev=1.)
-                #assign_tensor = tf.Print(assign_tensor, [assign_tensor], message='assign tensor:')
-                assign = tf.assign(variable, assign_tensor, name='assign_reset_%s' % name)
-                randomize_list.append(assign)
+                randomize_list.append(tf.assign(variable, assign_tensor, name='assign_reset_%s' % name))
             return randomize_list
 
     def _compute_lstm_matrix_parameters(self, idx):
@@ -345,6 +359,13 @@ class Lstm(Model):
                                                            name='lstm_matrix_%s' % layer_idx))
                     self._lstm_biases.append(tf.Variable(tf.zeros([output_dim]), name='lstm_bias_%s' % layer_idx))
 
+                input_dim = sum(self._num_nodes)
+                output_dim = self._num_layers
+                stddev = self._init_parameter * np.sqrt(1. / input_dim)
+                self._output_gates_matrix = tf.Variable(tf.truncated_normal([input_dim, output_dim],
+                                                                            stddev=stddev),
+                                                        name='output_gates_matrix')
+
                 self._output_matrices = list()
                 self._output_biases = list()
                 for layer_idx in range(self._num_output_layers):
@@ -355,6 +376,7 @@ class Lstm(Model):
                                                                                  stddev=stddev),
                                                              name='output_matrix_%s' % layer_idx))
                     self._output_biases.append(tf.Variable(tf.zeros([output_dim])))
+
 
         tower_grads = list()
         preds = list()
@@ -368,9 +390,9 @@ class Lstm(Model):
                         for layer_idx, layer_num_nodes in enumerate(self._num_nodes):
                             saved_states.append(
                                 (tf.Variable(
-                                     tf.zeros([gpu_batch_size, layer_num_nodes]),
-                                     trainable=False,
-                                     name='saved_state_%s_%s' % (layer_idx, 0)),
+                                    tf.zeros([gpu_batch_size, layer_num_nodes]),
+                                    trainable=False,
+                                    name='saved_state_%s_%s' % (layer_idx, 0)),
                                  tf.Variable(
                                      tf.zeros([gpu_batch_size, layer_num_nodes]),
                                      trainable=False,
@@ -388,7 +410,7 @@ class Lstm(Model):
                             loss = tf.reduce_mean(
                                 tf.nn.softmax_cross_entropy_with_logits(labels=device_labels, logits=logits))
                             losses.append(loss)
-                            #optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
+                            # optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
                             optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
                             grads_and_vars = optimizer.compute_gradients(loss + l2_loss)
                             tower_grads.append(grads_and_vars)
@@ -417,6 +439,7 @@ class Lstm(Model):
                 for loss, gpu_batch_size in zip(losses, self._batch_sizes_on_gpus):
                     l += float(gpu_batch_size) / float(self._batch_size) * loss
                 self.loss = l
+
         with tf.device(gpu_names[0]):
             with tf.name_scope('validation'):
                 self.sample_input = tf.placeholder(tf.float32,
