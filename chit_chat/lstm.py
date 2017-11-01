@@ -275,13 +275,8 @@ class Lstm(Model):
             regularizer = tf.contrib.layers.l2_regularizer(.5)
             loss = 0
             for matr in matrices:
-                shape = matr.get_shape().as_list()
-                divider = 1
-                for dim in shape:
-                    divider *= dim
-                divider = float(divider)
-                loss += regularizer(matr) / divider
-            return loss
+                loss += regularizer(matr)
+            return loss * self._regularization_rate
 
     def __init__(self,
                  batch_size=64,
@@ -292,7 +287,8 @@ class Lstm(Model):
                  vocabulary_size=None,
                  embedding_size=128,
                  num_unrollings=10,
-                 init_parameter=.3):
+                 init_parameter=.3,
+                 regularization_rate=1.):
         self._batch_size = batch_size
         self._num_layers = num_layers
         self._num_nodes = num_nodes
@@ -302,6 +298,7 @@ class Lstm(Model):
         self._num_output_nodes = num_output_nodes
         self._num_unrollings = num_unrollings
         self._init_parameter = init_parameter
+        self._regularization_rate = regularization_rate
 
         self._embedding_matrix = tf.Variable(
             tf.truncated_normal([self._vocabulary_size, self._embedding_size],
