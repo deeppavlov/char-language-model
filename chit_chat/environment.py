@@ -3,6 +3,8 @@ import pickle
 import numpy as np
 import re
 import multiprocessing as mp
+import datetime as dt
+
 import tensorflow as tf
 from tensorflow.python import debug as tf_debug
 from some_useful_functions import (construct, add_index_to_filename_if_needed, match_two_dicts, create_path,
@@ -132,6 +134,7 @@ class Handler(object):
         self._processing_type = processing_type
         self._environment_instance = environment_instance
         self._save_path = save_path
+        self._current_log_path = None
         self._result_types = self._environment_instance.put_result_types_in_correct_order(result_types)
         self._bpc = 'bpc' in self._result_types
         self._hooks = hooks
@@ -861,7 +864,10 @@ class Handler(object):
         if self._save_path is None:
             print('Warning! Launch is not logged because save_path was provided to Handler constructor')
         else:
-            with open(add_index_to_filename_if_needed(self._save_path + '/launch_log.txt'), 'w') as f:
+            self._current_log_path = add_index_to_filename_if_needed(self._save_path + '/launch_log.txt')
+            with open(self._current_log_path, 'w') as f:
+                now = dt.datetime.now()
+                f.write(str(now) + '\n' * 2)
                 f.write('launch regime: ' + self._processing_type + '\n' * 2)
                 if self._processing_type == 'train' or self._processing_type == 'test':
                     f.write('build parameters:\n')
@@ -877,12 +883,19 @@ class Handler(object):
                     f.write('train method default parameters:\n')
                     f.write(nested2string(self._environment_instance.get_default_method_parameters('train')) + '\n' * 2)
 
+    def log_finish_time(self):
+        with open(self._current_log_path, 'a') as f:
+            now = dt.datetime.now()
+            f.write('\nfinish time: ' + str(now) + '\n')
+
     def close(self):
-        for file in self._train_files.values():
-            file.close()
-        for dataset in self._dataset_specific.values():
-            for file_d in dataset['files'].values():
-                file_d.close()
+        if self._processing_type == 'train':
+            for file in self._train_files.values():
+                file.close()
+        if self._processing_type == 'test' or self._dataset_specific == 'train':
+            for dataset in self._dataset_specific.values():
+                for file_d in dataset['files'].values():
+                    file_d.close()
 
 
 class InvalidArgumentError(Exception):
@@ -1140,6 +1153,11 @@ class Environment(object):
             default_dataset = None
         _, gens = zip(*sorted(self._batch_generator_classes.items()))
         self._default_batch_generator = gens[0]
+        # additions_to_feed_dict have following format
+        # It is a dictionary which keys are 'placeholder' and 'value'
+        # 'placeholder' points to tensor alias and 'value' points to Controller specs
+        # When providing additions_to_feed_dict to train method abbreviation of 'value' entry is allowed
+        # if tensor does not change during learning. It is possible to pass tensor value in 'value' entry.
         self._default_train_method_args = dict(
             session_specs={'allow_soft_placement': False,
                            'gpu_memory': None,
@@ -1164,6 +1182,7 @@ class Environment(object):
                              'checkpoint_steps': None,
                              'debug': None,
                              'validation_datasets': None,
+                             'validation_additions_to_feed_dict': None,
                              'validation_batch_size': 1,
                              'valid_batch_kwargs': dict(),
                              'no_validation': False},
@@ -1635,6 +1654,36 @@ class Environment(object):
                 kwargs[key] = arg
         return kwargs
 
+    def _form_validation_feed_dict(self,
+                                   train_feed_dict_additions,
+                                   additional_controllers,
+                                   validation_additional_feed_dict):
+        if validation_additional_feed_dict is not None:
+            validation_placeholders = dict()
+            for addition in validation_additional_feed_dict:
+                validation_placeholders[addition['placeholder']] = addition
+        else:
+            validation_placeholders = None
+        if train_feed_dict_additions is None and validation_additional_feed_dict is None:
+            valid_add_feed_dict = dict()
+        elif validation_additional_feed_dict is None:
+            valid_add_feed_dict = dict()
+            for addition, add_controller in zip(train_feed_dict_additions, additional_controllers):
+                valid_add_feed_dict[self._pupil_hooks[addition['placeholder']]] = add_controller.get()
+        elif train_feed_dict_additions is None:
+            valid_add_feed_dict = dict()
+            for addition in validation_additional_feed_dict:
+                valid_add_feed_dict[self._pupil_hooks[addition['placeholder']]] = addition['value']
+        else:
+            valid_add_feed_dict = dict()
+            for addition, add_controller in zip(train_feed_dict_additions, additional_controllers):
+                if addition['placeholder'] not in validation_placeholders:
+                    valid_add_feed_dict[self._pupil_hooks[addition['placeholder']]] = add_controller.get()
+                else:
+                    value = validation_placeholders[addition['placeholder']]['value']
+                    valid_add_feed_dict[self._pupil_hooks[addition['placeholder']]] = value
+        return valid_add_feed_dict
+
     def _train(self,
                run_specs,
                checkpoints_path,
@@ -1655,10 +1704,13 @@ class Environment(object):
         learning_rate_controller = Controller(self._storage,
                                               train_specs['learning_rate'])
         train_feed_dict_additions = train_specs['additions_to_feed_dict']
+        validation_additional_feed_dict = train_specs['validation_additions_to_feed_dict']
+
         if train_feed_dict_additions is not None:
+            print('train_feed_dict_additions:', train_feed_dict_additions)
             additional_controllers = list()
             for addition in train_feed_dict_additions:
-                additional_controllers.append(Controller(self._storage, addition))
+                additional_controllers.append(Controller(self._storage, addition['value']))
         else:
             additional_controllers = None
 
@@ -1774,7 +1826,7 @@ class Environment(object):
                 feed_dict[self._pupil_hooks['labels']] = train_labels
             if train_feed_dict_additions is not None:
                 for addition, add_controller in zip(train_feed_dict_additions, additional_controllers):
-                    feed_dict[self._pupil_hooks[addition['name']]] = add_controller.get()
+                    feed_dict[self._pupil_hooks[addition['placeholder']]] = add_controller.get()
             train_operations = self._handler.get_tensors('train', step)
             #print('train_operations:', train_operations)
             #print('feed_dict:', feed_dict)
@@ -1783,13 +1835,11 @@ class Environment(object):
 
             self._handler.process_results(step, train_res, regime='train')
             if it_is_time_for_validation.get():
+                if len(train_specs['validation_datasets']) > 0:
+                    valid_add_feed_dict = self._form_validation_feed_dict(train_feed_dict_additions,
+                                                                          additional_controllers,
+                                                                          validation_additional_feed_dict)
                 for validation_dataset in train_specs['validation_datasets']:
-                    if train_feed_dict_additions is None:
-                        valid_add_feed_dict = None
-                    else:
-                        valid_add_feed_dict = dict()
-                        for addition, add_controller in zip(train_feed_dict_additions, additional_controllers):
-                            valid_add_feed_dict[self._pupil_hooks[addition['placeholder']]] = add_controller.get()
                     _ = self._validate(batch_generator_class,
                                        validation_dataset,
                                        train_specs['validation_batch_size'],
@@ -1797,10 +1847,9 @@ class Environment(object):
                                        training_step=step,
                                        additional_feed_dict=valid_add_feed_dict)
             if it_is_time_for_example.get():
-                valid_add_feed_dict = dict()
-                if train_feed_dict_additions is not None:
-                    for addition, add_controller in zip(train_feed_dict_additions, additional_controllers):
-                        valid_add_feed_dict[self._pupil_hooks[addition['placeholder']]] = add_controller.get()
+                valid_add_feed_dict = self._form_validation_feed_dict(train_feed_dict_additions,
+                                                                      additional_controllers,
+                                                                      validation_additional_feed_dict)
                 if schedule['fuses'] is not None:
                     _ = self._on_fuses(train_batches,
                                        schedule['fuses'],
@@ -1846,6 +1895,16 @@ class Environment(object):
             else:
                 new_value = None
             self._set_controller_name_in_specs(new_value, 'debug')
+        if key == 'additions_to_feed_dict':
+            print('inside additions_to_feed_dict shortcuts processing')
+            if new_value is not None:
+                for addition in new_value:
+                    print('addition:', addition)
+                    if not isinstance(addition['value'], dict):
+                        print('Removing of shortcut is happening now')
+                        addition['value'] = {'type': 'fixed', 'value': addition['value']}
+                        print("addition['value']:", addition['value'])
+                    self._set_controller_name_in_specs(addition['value'], addition['placeholder'])
         return new_value
 
     def _process_abbreviations(self, set_of_kwargs, method_name):
@@ -2206,6 +2265,7 @@ class Environment(object):
                                     init_step=init_step)
         if checkpoints_path is not None:
             self._create_checkpoint('final', checkpoints_path)
+        self._handler.log_finish_time()
         self._handler.close()
 
     def _several_launches_without_rebuilding(self,
@@ -2338,6 +2398,7 @@ class Environment(object):
                                 evaluation['result_types'],
                                 eval_dataset_names=list(evaluation['datasets'].keys()),
                                 hyperparameters=hp)
+        self._handler.log_launch()
         for build_kwargs, build_hp_values in zip(list_of_build_kwargs, list_of_build_hp_values):
             queue = mp.Queue()
             p = mp.Process(target=self._several_launches_without_rebuilding,
@@ -2351,6 +2412,8 @@ class Environment(object):
                 print('\nidx: %s\nres: %s' % (idx, res))
                 self._handler.process_results(hp, res, regime='several_launches')
             p.join()
+        self._handler.log_finish_time()
+        self._handler.close()
 
     def inference(self,
                   restore_path,
