@@ -147,6 +147,46 @@ class Lstm(Model):
                              for point_idx, sorting_factor in zip(reversed(set[2][1:]), sorting_factors)]))
         return output
 
+    @staticmethod
+    def form_list_of_kwargs(kwargs_for_building, build_hyperparameters):
+        output = [(construct(kwargs_for_building), dict(), list())]
+        lengths = list()
+        print('hyperparameters:', build_hyperparameters)
+        for (name, controller_specs, values) in build_hyperparameters:
+            new_output = list()
+            lengths.append(len(values))
+            for base in output:
+                for idx, value in enumerate(values):
+                    new_base = construct(base)
+                    # print('in _form_list_of_kwargs:')
+                    # print('value:', value)
+                    if not isinstance(name, tuple):
+                        new_base[0][name] = controller_specs[idx]
+                    else:
+                        if new_base[0]['run'][0]['train_specs']['additions_to_feed_dict'] is None:
+                            new_base[0]['run'][0]['train_specs']['additions_to_feed_dict'] = list()
+                        additions = new_base[0]['run'][0]['train_specs']['additions_to_feed_dict']
+                        addition_idx = self._check_hp_in_additional_feed_dict(additions, name[0])
+                        if addition_idx is not None:
+                            additions[addition_idx]['value'][name[1]] = value
+                        else:
+                            additions.append({'placeholder': name[0], 'value': construct(controller_specs)})
+                            additions[-1]['value'][name[1]] = value
+                    # print("new_base[0]['run'][0]['train_specs']['learning_rate']:",
+                    #       new_base[0]['run'][0]['train_specs']['learning_rate'])
+                    new_base[1][name] = value
+                    new_base[2].append(idx)
+                    new_output.append(new_base)
+            output = new_output
+        sorting_factors = [1]
+        for length in reversed(lengths[1:]):
+            sorting_factors.append(sorting_factors[-1] * length)
+        output = sorted(output,
+                        key=lambda set: sum(
+                            [point_idx*sorting_factor \
+                             for point_idx, sorting_factor in zip(reversed(set[2][1:]), sorting_factors)]))
+        return output
+
     def _lstm_layer(self, inp, state, layer_idx):
         with tf.name_scope('lstm_layer_%s' % layer_idx):
             matr = self._lstm_matrices[layer_idx]

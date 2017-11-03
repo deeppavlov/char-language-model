@@ -19,6 +19,15 @@ escape_sequences_replacements = {'\\': '\\\\',
                                  '\v': '\\v'}
 
 
+class InvalidArgumentError(Exception):
+    def __init__(self, msg, value, name, allowed_values):
+        super(InvalidArgumentError, self).__init__(msg)
+        self._msg = msg
+        self._value = value
+        self._name = name
+        self._allowed_values = allowed_values
+
+
 def create_vocabulary(text):
     all_characters = list()
     for char in text:
@@ -495,14 +504,6 @@ def get_num_gpus_and_bs_on_gpus(batch_size, num_gpus, num_available_gpus):
 def nested2string(nested, indent=0):
     string = list()
     indent = indent
-    return recur_nested_2_string(nested, string, indent)
-    string = ''.join(string)
-    return string
-
-
-def nested2string(nested, indent=0):
-    string = list()
-    indent = indent
     recur_nested_2_string(nested, string, indent)
     string = ''.join(string)
     return string
@@ -564,3 +565,26 @@ def add_escape_characters(string):
         else:
             new_string += char
     return new_string
+
+
+def all_entries_in_nested_structure(nested):
+    all_entries = list()
+    recur_entries(nested, all_entries)
+    return all_entries
+
+
+def recur_entries(nested, all_entries):
+    if isinstance(nested, dict):
+        all_entries.extend(list(nested.keys()))
+        for value in nested.values():
+            recur_entries(value, all_entries)
+    elif isinstance(nested, (list, tuple)):
+        for value in nested:
+            recur_entries(value, all_entries)
+
+
+def unite_dicts(list_of_dicts):
+    new_dict = dict()
+    for d in list_of_dicts:
+        new_dict.update(d)
+    return new_dict

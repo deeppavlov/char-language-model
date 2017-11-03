@@ -23,7 +23,7 @@ cpiv = get_positions_in_vocabulary(vocabulary)
 
 env.build(batch_size=64,
           num_layers=2,
-          num_nodes=[100, 103],
+          num_nodes=[100, 100],
           vocabulary_size=vocabulary_size,
           embedding_size=128,
           num_unrollings=10)

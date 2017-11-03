@@ -48,7 +48,7 @@ list_of_lr = [dict(type='exponential_decay', init=v, decay=.9, period=500) for v
 env.several_launches(evaluation,
                      kwargs_for_building,
                      #build_hyperparameters={'init_parameter': [.01, .03, .1, .3, 1., 3.]},
-                     build_hyperparameters={'regulariztion_rate': [.001, .01, .03, .1, .3, 1., 3., 10.]},
+                     build_hyperparameters={'regularization_rate': [.001, .01, .03, .1, .3, 1., 3., 10.]},
                      other_hyperparameters={'learning_rate': list_of_lr},
                      batch_size=64,
                      result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
