@@ -473,7 +473,7 @@ def separate_all_hps(not_formalized_hps):
     return formalized_hps
 
 
-def split_to_groups_by_hp_type(hps_formalized, hp_names_by_hp_type_groups):
+def split_to_groups_by_hp_type(hps_formalized):
     built_in = dict()
     build_hp = dict()
     additional_placeholder = dict()
@@ -487,7 +487,7 @@ def split_to_groups_by_hp_type(hps_formalized, hp_names_by_hp_type_groups):
             additional_placeholder[hp_formalized_name] = values
         elif hp_formalized_name[0] == 'batch_kwarg':
             batch_kwarg[hp_formalized_name] = values
-    return build_hp, built_in, batch_kwarg, additional_placeholder
+    return [build_hp, built_in, batch_kwarg, additional_placeholder]
 
 
 def split_to_groups_on_index(hps, index):
@@ -562,7 +562,7 @@ def create_empty_insertions_template(insert_instructions):
     return template
 
 
-def one_combination_insertions(insert_template, hp_combination):
+def create_one_combination_insertions(insert_template, hp_combination):
     combination_insertions = construct(insert_template)
     for hp_name, value in hp_combination.items():
         insert_key = (hp_name[0], hp_name[1], hp_name[2])
@@ -583,13 +583,47 @@ def create_insertions(insert_instructions, hp_combinations):
     insertions = list()
     insert_template = create_empty_insertions_template(insert_instructions)
     for hp_combination in hp_combinations:
-        insertions.append(list(one_combination_insertions(insert_template, hp_combination).values()))
+        insertions.append(list(create_one_combination_insertions(insert_template, hp_combination).values()))
     return insertions
+
+
+def formalize_and_create_insertions(hps):
+    insert_instructions = create_insert_instructions(hps)
+    hps = separate_all_hps(hps)
+    hps_by_groups = split_to_groups_by_hp_type(hps)
+    hps = OrderedDict()
+    for hp_group in hps_by_groups:
+        hp_group = sort_hps(hp_group)
+        hps.update(hp_group)
+    hp_combinations = mix_hps(hps)
+    combination_insertions = create_insertions(insert_instructions, hp_combinations)
+    return hp_combinations, combination_insertions
 
 
 def formalize_and_create_insertions_for_other_hps(hps):
     hps = process_other_hp_abbreviations(hps)
+    hp_combinations, combination_insertions = formalize_and_create_insertions(hps)
+    return hp_combinations, combination_insertions
 
+
+def post_process_build_insertions(combination_insertions):
+    post_processed = list()
+    for one_combination_insertions in combination_insertions:
+        one_combination_processed = list()
+        for one_insertion in one_combination_insertions:
+            del one_insertion['hp_type']
+            share = one_insertion['share']
+            del one_insertion['share']
+            one_combination_processed.append((one_insertion, share))
+        post_processed.append(one_combination_processed)
+    return post_processed
+
+
+def formalize_and_create_insertions_for_build_hps(hps):
+    hps = process_build_hp_abbreviations(hps)
+    hp_combinations, combination_insertions = formalize_and_create_insertions(hps)
+    post_processed_combination_insertions = post_process_build_insertions(combination_insertions)
+    return hp_combinations, post_processed_combination_insertions
 
 
 def insert_not_build_hp(kwargs, one_hp_insertion):
