@@ -1,7 +1,7 @@
 
 from environment import Environment
 from vanilla import Vanilla, BatchGenerator
-from lstm_go import Lstm, LstmBatchGenerator
+from lstm import Lstm, LstmBatchGenerator
 from some_useful_functions import create_vocabulary, get_positions_in_vocabulary
 
 f = open('datasets/ted.txt', 'r', encoding='utf-8')
@@ -42,11 +42,11 @@ env.build(batch_size=64,
 
 env.train(save_path='debugging_environment/first',
           learning_rate={'type': 'exponential_decay',
-                         'init': .003,
+                         'init': .002,
                          'decay': .9,
                          'period': 500},
-          additions_to_feed_dict=add_feed,
-          validation_additions_to_feed_dict=valid_add_feed,
+          # additions_to_feed_dict=add_feed,
+          # validation_additions_to_feed_dict=valid_add_feed,
           batch_size=64,
           num_unrollings=10,
           vocabulary=vocabulary,

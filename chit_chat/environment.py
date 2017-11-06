@@ -8,7 +8,9 @@ from some_useful_functions import InvalidArgumentError
 from some_useful_functions import (construct, add_index_to_filename_if_needed, match_two_dicts, create_path,
                                    check_if_key_in_nested_dict, add_missing_to_list, print_and_log,
                                    apply_temperature, sample)
-from args_parsing import parse_1_set_of_kwargs, parse_train_method_arguments
+from args_parsing import parse_1_set_of_kwargs, parse_train_method_arguments, \
+    formalize_and_create_insertions_for_build_hps, formalize_and_create_insertions_for_other_hps, \
+    create_all_args_for_launches, apply_share
 from handler import Handler
 
 
@@ -1031,259 +1033,6 @@ class Environment(object):
             self.set_in_storage(step=step)
         return step
 
-    # @staticmethod
-    # def _set_controller_name_in_specs(controller_specs, name):
-    #     if isinstance(controller_specs, dict):
-    #         if 'name' not in controller_specs:
-    #             controller_specs['name'] = name
-    #
-    # def _process_abbreviation_in_1_entry(self, key, value):
-    #     new_value = construct(value)
-    #     if key == 'stop':
-    #         if isinstance(value, int):
-    #             new_value = {'type': 'limit_steps', 'limit': value}
-    #         self._set_controller_name_in_specs(new_value, 'stop')
-    #     if key == 'batch_size':
-    #         if isinstance(value, int):
-    #             new_value = {'type': 'fixed', 'value': value}
-    #         self._set_controller_name_in_specs(new_value, 'batch_size')
-    #     if key == 'num_unrollings':
-    #         if isinstance(value, int):
-    #             new_value = {'type': 'fixed', 'value': value}
-    #         self._set_controller_name_in_specs(new_value, 'num_unrollings')
-    #     if key == 'checkpoint_steps':
-    #         if isinstance(value, list):
-    #             new_value = {'type': 'true_on_steps', 'steps': value}
-    #         elif isinstance(value, int):
-    #             new_value = {'type': 'periodic_truth', 'period': value}
-    #         else:
-    #             new_value = {'type': 'always_false'}
-    #         self._set_controller_name_in_specs(new_value, 'checkpoint_steps')
-    #     if key == 'learning_rate':
-    #         self._set_controller_name_in_specs(new_value, 'learning_rate')
-    #     if key == 'debug':
-    #         if isinstance(value, int):
-    #             new_value = {'type': 'true_on_steps', 'steps': [value]}
-    #         else:
-    #             new_value = None
-    #         self._set_controller_name_in_specs(new_value, 'debug')
-    #     if key == 'additions_to_feed_dict':
-    #         print('inside additions_to_feed_dict shortcuts processing')
-    #         if new_value is not None:
-    #             for addition in new_value:
-    #                 print('addition:', addition)
-    #                 if not isinstance(addition['value'], dict):
-    #                     print('Removing of shortcut is happening now')
-    #                     addition['value'] = {'type': 'fixed', 'value': addition['value']}
-    #                     print("addition['value']:", addition['value'])
-    #                 self._set_controller_name_in_specs(addition['value'], addition['placeholder'])
-    #     return new_value
-    #
-    # def _process_abbreviations(self, set_of_kwargs, method_name):
-    #     for key, value in set_of_kwargs.items():
-    #         value = self._process_abbreviation_in_1_entry(key, value)
-    #         set_of_kwargs[key] = value
-    #     if search_in_nested_dictionary(set_of_kwargs, 'summary') is None:
-    #         add_graph_to_summary = search_in_nested_dictionary(set_of_kwargs, 'add_graph_to_summary')
-    #         train_summary_tensors = search_in_nested_dictionary(set_of_kwargs, 'train_summary_tensors')
-    #         if train_summary_tensors is not None:
-    #             if len(train_summary_tensors) > 0:
-    #                 summary_tensors_provided = True
-    #             else:
-    #                 summary_tensors_provided = False
-    #         else:
-    #             summary_tensors_provided = False
-    #         if add_graph_to_summary or summary_tensors_provided:
-    #             set_of_kwargs['summary'] = True
-    #         else:
-    #             set_of_kwargs['summary'] = False
-    #     self._process_datasets_shortcuts(set_of_kwargs)
-    #     self._process_batch_kwargs_shortcuts(set_of_kwargs, method_name)
-
-    # def _process_batch_kwargs_shortcuts(self, set_of_kwargs, method_name):
-    #     if method_name == 'train':
-    #         if 'train_batch_kwargs' not in set_of_kwargs:
-    #             set_of_kwargs['train_batch_kwargs'] = dict()
-    #             if 'num_unrollings' in set_of_kwargs:
-    #                 set_of_kwargs['train_batch_kwargs']['num_unrollings'] = set_of_kwargs['num_unrollings']
-    #                 del set_of_kwargs['num_unrollings']
-    #             if 'vocabulary' in set_of_kwargs:
-    #                 set_of_kwargs['train_batch_kwargs']['vocabulary'] = set_of_kwargs['vocabulary']
-    #                 del set_of_kwargs['vocabulary']
-    #         if 'valid_batch_kwargs' not in set_of_kwargs:
-    #             set_of_kwargs['valid_batch_kwargs'] = dict()
-    #             if 'num_unrollings' in set_of_kwargs['train_batch_kwargs']:
-    #                 set_of_kwargs['valid_batch_kwargs'] = {'num_unrollings': 1}
-    #             if 'vocabulary' in set_of_kwargs['train_batch_kwargs']:
-    #                 set_of_kwargs['valid_batch_kwargs']['vocabulary'] = list(
-    #                     set_of_kwargs['train_batch_kwargs']['vocabulary'])
-    #     if method_name == 'test':
-    #         if 'valid_batch_kwargs' not in set_of_kwargs:
-    #             set_of_kwargs['valid_batch_kwargs'] = dict()
-    #             if 'num_unrollings' in set_of_kwargs:
-    #                 set_of_kwargs['valid_batch_kwargs']['num_unrollings'] = {'num_unrollings': 1}
-    #                 del set_of_kwargs['num_unrollings']
-    #             if 'vocabulary' in set_of_kwargs:
-    #                 set_of_kwargs['valid_batch_kwargs']['vocabulary'] = list(set_of_kwargs['vocabulary'])
-    #                 del set_of_kwargs['vocabulary']
-    #
-    # def _process_datasets_shortcuts(self,
-    #                                 set_of_kwargs):
-    #     taken_names = list(self._datasets.keys())
-    #     train_dataset = self._process_train_dataset_shortcuts(set_of_kwargs, taken_names)
-    #     keys_to_remove = ['train_dataset', 'train_dataset_name', 'train_dataset_text', 'train_dataset_filename']
-    #     for key in keys_to_remove:
-    #         if key in set_of_kwargs:
-    #             del set_of_kwargs[key]
-    #     set_of_kwargs['train_dataset'] = train_dataset
-    #     validation_datasets = self._process_validation_datasets_shortcuts(set_of_kwargs, taken_names)
-    #     keys_to_remove = ['validation_datasets', 'validation_dataset_names',
-    #                       'validation_dataset_texts', 'validation_dataset_filenames']
-    #     for key in keys_to_remove:
-    #         if key in set_of_kwargs:
-    #             del set_of_kwargs[key]
-    #     set_of_kwargs['validation_datasets'] = validation_datasets
-    #
-    # def _process_validation_datasets_shortcuts(self,
-    #                                            set_of_kwargs,
-    #                                            taken_names):
-    #     validation_datasets = list()
-    #     if 'validation_datasets' in set_of_kwargs:
-    #         taken_names.extend(set_of_kwargs['validation_datasets'].keys())
-    #         validation_datasets.extend(set_of_kwargs['validation_datasets'])
-    #     if 'validation_dataset_names' in set_of_kwargs:
-    #         for name in set_of_kwargs['validation_dataset_names']:
-    #             if name not in self._datasets.keys():
-    #                 raise InvalidArgumentError("Wrong value '%s' of variable '%s'\nAllowed values: '%s'" %
-    #                                            (name,
-    #                                             "set_of_kwargs['validation_dataset_names']",
-    #                                             list(self._datasets.keys())))
-    #             validation_datasets.append([self._datasets[name], name])
-    #     if 'validation_dataset_texts' in set_of_kwargs:
-    #         for text in set_of_kwargs['validation_dataset_texts']:
-    #             key, value = self._process_input_text_dataset(text, taken_names)
-    #             taken_names.append(key)
-    #             validation_datasets.append([value, key])
-    #     if 'validation_dataset_filenames' in set_of_kwargs:
-    #         for filename in set_of_kwargs['validation_dataset_filenames']:
-    #             key, value = self._process_dataset_filename(filename)
-    #             taken_names.append(key)
-    #             validation_datasets.append([value, key])
-    #     return validation_datasets
-    #
-    # def _process_train_dataset_shortcuts(self,
-    #                                      set_of_kwargs,
-    #                                      taken_names):
-    #     if 'train_dataset' in set_of_kwargs:
-    #         taken_names.extend(set_of_kwargs['train_dataset'].keys())
-    #         return set_of_kwargs['train_dataset']
-    #     if 'train_dataset_name' in set_of_kwargs:
-    #         if set_of_kwargs['train_dataset_name'] not in self._datasets.keys():
-    #             raise InvalidArgumentError("Wrong value '%s' of variable '%s'\nAllowed values: '%s'" %
-    #                                        (set_of_kwargs['train_dataset_name'], "set_of_kwargs['train_dataset_name']",
-    #                                         list(self._datasets.keys())))
-    #         return [self._datasets[set_of_kwargs['train_dataset_name']], set_of_kwargs['train_dataset_name']]
-    #     if 'train_dataset_text' in set_of_kwargs:
-    #         key, value =  self._process_input_text_dataset(set_of_kwargs['train_dataset_text'], taken_names)
-    #         taken_names.append(key)
-    #         return [value, key]
-    #     if 'train_dataset_filename' in set_of_kwargs:
-    #         key, value = self._process_dataset_filename(set_of_kwargs['train_dataset_filename'])
-    #         taken_names.append(key)
-    #         return [value, key]
-    #
-    # def _process_input_text_dataset(self, input, taken_names):
-    #     idx = 0
-    #     base = 'default_'
-    #     new_key = base + str(idx)
-    #     while new_key in taken_names:
-    #         idx += 1
-    #         new_key = base + str(idx)
-    #     return new_key, input
-    #
-    # def _process_dataset_filename(self, input):
-    #     splitted = input.split('/')
-    #     self._datasets[splitted[-1]] = input
-    #     return splitted[-1], input
-    #
-    # def _parse_1_set_of_kwargs(self,
-    #                            kwargs_to_parse,
-    #                            method_name,
-    #                            repeated_key,
-    #                            only_repeated,
-    #                            old_arguments=None):
-    #     # print('\n\n_parse_1_set_of_kwargs method:\nkwargs_to_parse:\n', kwargs_to_parse, '\nmethod_name:\n',
-    #     #       method_name, '\nrepeated_key:\n', repeated_key, '\nonly_repeated:\n', only_repeated, '\nold_arguments:\n',
-    #     #       old_arguments)
-    #     kwargs_to_parse = construct(kwargs_to_parse)
-    #     self._process_abbreviations(kwargs_to_parse, method_name)
-    #     if old_arguments is None:
-    #         if only_repeated:
-    #             tmp = self.get_default_method_parameters(method_name)
-    #             current_arguments = tmp[repeated_key]
-    #         else:
-    #             current_arguments = self.get_default_method_parameters(method_name)
-    #     else:
-    #         current_arguments = construct(old_arguments)
-    #
-    #     for key, value in kwargs_to_parse.items():
-    #         paste_into_nested_structure(current_arguments, key, value)
-    #
-    #     #print('current_arguments:\n', current_arguments)
-    #     return current_arguments
-    #
-    # def _parse_list_of_sets_of_kwargs(self,
-    #                                   list_of_sets,
-    #                                   method_name,
-    #                                   repeated_key):
-    #     # print('\n\n_parse_list_of_sets_of_kwargs method\nlist_of_sets:\n', list_of_sets, '\nmethod_name:\n', method_name,
-    #     #       '\nrepeated_key:\n', repeated_key)
-    #     parsed = self._parse_1_set_of_kwargs(list_of_sets[0],
-    #                                          method_name,
-    #                                          repeated_key,
-    #                                          False)
-    #
-    #     parsed[repeated_key] = [parsed[repeated_key]]
-    #
-    #     repeated_parsed = parsed[repeated_key][0]
-    #     for kwargs_set in list_of_sets[1:]:
-    #         repeated_parsed = self._parse_1_set_of_kwargs(kwargs_set,
-    #                                                       method_name,
-    #                                                       repeated_key,
-    #                                                       True,
-    #                                                       old_arguments=repeated_parsed)
-    #         parsed[repeated_key].append(repeated_parsed)
-    #     #print('parsed:\n', parsed)
-    #     return parsed
-    #
-    # def _parse_train_method_arguments(self,
-    #                                   train_args,
-    #                                   train_kwargs,
-    #                                   set_passed_parameters_as_default=False):
-    #     """Performs parsing of 'train' and 'train_assistant' method arguments. Optionally updates
-    #     self._pupil_default_training or self._assistant_default_training.
-    #     Args:
-    #         train_args: args passed to train method
-    #         set_passed_parameters_as_default: defines if reset of default parameters is needed
-    #         train_kwargs: kwargs passed to train method
-    #     Returns:
-    #         a dictionary of start parameters (same format as self._default_start)
-    #         a list of dictionaries with all parameters required for launch (each dictionary has the same format as
-    #             self._pupil_default_training or self._assistant_default_training)"""
-    #
-    #     #print('\n\n_parse_train_method_arguments method\ntrain_args:', train_args, '\ntrain_kwargs:', train_kwargs)
-    #     if len(train_args) == 0:
-    #         #print('train_kwargs:', train_kwargs)
-    #         parsed_arguments = self._parse_list_of_sets_of_kwargs([train_kwargs],
-    #                                                               'train',
-    #                                                               'run')
-    #     else:
-    #         parsed_arguments = self._parse_list_of_sets_of_kwargs(train_args,
-    #                                                               'train',
-    #                                                               'run')
-    #
-    #     return parsed_arguments
-
     def train(self,
               *args,
               start_session=True,
@@ -1508,9 +1257,13 @@ class Environment(object):
                          evaluation,
                          kwargs_for_building,
                          args_for_launches=None,
-                         build_hyperparameters=dict(),
-                         other_hyperparameters=dict(),
+                         build_hyperparameters=None,
+                         other_hyperparameters=None,
                          **kwargs):
+        if build_hyperparameters is None:
+            build_hyperparameters = dict()
+        if other_hyperparameters is None:
+            other_hyperparameters = dict()
         self._store_launch_parameters(evaluation=evaluation,
                                       kwargs_for_building=kwargs_for_building,
                                       args_for_launches=args_for_launches,
@@ -1522,53 +1275,49 @@ class Environment(object):
                                                   kwargs,
                                                   set_passed_parameters_as_default=False)
         session_specs = tmp_output['session_specs']
-        build_hyperparameters = self._process_build_hp_abbreviations(construct(build_hyperparameters))
-        other_hyperparameters = self._process_abbreviations_in_hyperparameters_set(construct(other_hyperparameters))
-        #print('build_hyperparameters:', build_hyperparameters)
-        #print('other_hyperparameters:', other_hyperparameters)
-        list_of_build_kwargs = self._pupil_class.form_list_of_kwargs(kwargs_for_building,
-                                                                     build_hyperparameters)
 
-        list_of_build_kwargs, list_of_build_hp_values, _ = zip(*list_of_build_kwargs)
-        base = tmp_output
-        del base['session_specs']
-        args_for_launches = self._form_list_of_kwargs(base, other_hyperparameters)
-        # print("args_for_launches[0][0]['start_specs']['save_path']:",
-        #       args_for_launches[0][0]['start_specs']['save_path'])
+        build_hp_combs, build_insertions = formalize_and_create_insertions_for_build_hps(build_hyperparameters)
+        other_hp_combs, other_insertions = formalize_and_create_insertions_for_other_hps(other_hyperparameters)
 
-        args_for_launches, hp_values_list, _ = zip(*args_for_launches)
+        args_for_launches = create_all_args_for_launches(kwargs, other_insertions)
 
-        print('len(args_for_launches):', len(args_for_launches))
-        print('hp_values_list:', hp_values_list)
-
-        refactored = list()
-        for args in args_for_launches:
-            start_specs = args['start_specs']
-            run_specs_set = args['run']
-            refactored.append((start_specs, run_specs_set))
-        args_for_launches = refactored
-        hp = list(build_hyperparameters.keys())
-        hp.extend(list(other_hyperparameters.keys()))
+        hps = list()
+        if len(build_hp_combs) > 0:
+            hps.extend(list(build_hp_combs[0].keys()))
+        if len(other_hp_combs) > 0:
+            hps.extend(list(other_hp_combs[0].keys()))
         self._handler = Handler(self,
                                 self._pupil_hooks,
                                 'several_launches',
                                 evaluation['save_path'],
                                 evaluation['result_types'],
                                 eval_dataset_names=list(evaluation['datasets'].keys()),
-                                hyperparameters=hp)
+                                hyperparameters=hps)
         self._handler.log_launch()
-        for build_kwargs, build_hp_values in zip(list_of_build_kwargs, list_of_build_hp_values):
+        for (one_set_of_build_insertions, share), build_hp_comb in zip(build_insertions, build_hp_combs):
+            build_kwargs = self._pupil_class.form_kwargs(kwargs_for_building,
+                                                         one_set_of_build_insertions)
+            applied_args_for_launches = construct(args_for_launches)
+            parsed = list()
+            for applied in applied_args_for_launches:
+                with_share = apply_share(applied, share)
+                one_parsed = parse_train_method_arguments(self,
+                                                          [],
+                                                          with_share,
+                                                          set_passed_parameters_as_default=False)
+                start_specs = one_parsed['start_specs']
+                run_specs_set = one_parsed['run']
+                parsed.append((start_specs, run_specs_set))
             queue = mp.Queue()
             p = mp.Process(target=self._several_launches_without_rebuilding,
                            args=(queue, build_kwargs, session_specs, args_for_launches, evaluation))
             p.start()
-            for idx in range(len(args_for_launches)):
-                hp = hp_values_list[idx]
+            for idx, other_hp_comb in enumerate(other_hp_combs):
+                hp_combination = construct(build_hp_comb)
+                hp_combination.update(other_hp_comb)
                 res = queue.get()
-                #print('res:', res)
-                hp.update(build_hp_values)
                 print('\nidx: %s\nres: %s' % (idx, res))
-                self._handler.process_results(hp, res, regime='several_launches')
+                self._handler.process_results(hp_combination, res, regime='several_launches')
             p.join()
         self._handler.log_finish_time()
         self._handler.close()

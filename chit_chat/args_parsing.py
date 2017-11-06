@@ -547,18 +547,37 @@ def create_empty_insertions_template(insert_instructions):
             paste_value = value['controller_template']
         else:
             paste_value = 'not_specified'
+        if value['share'] is None:
+            share = None
+        else:
+            if value['share']['controller']:
+                if value['direction'] == 'additional_placeholder':
+                    share_paste = {'placeholder': key[1],
+                                   'value': {'type': 'fixed',
+                                             'value': 'not_specified',
+                                             'name': key[1]}}
+                else:
+                    share_paste = {'type': 'fixed',
+                                   'value': 'not_specified',
+                                   'name': key[1]}
+            else:
+                share_paste = 'not_specified'
+            share = {'hp_type': value['direction'],
+                     'hp_name': key[1],
+                     'list_index': key[2],
+                     'paste': share_paste}
         if key[0] == 'additional_placeholder':
             template[key] = {'hp_type': key[0],
                              'hp_name': key[1],
                              'list_index': key[2],
                              'paste': {'placeholder': key[1], 'value': paste_value},
-                             'share': value['share']}
+                             'share': share}
         else:
             template[key] = {'hp_type': key[0],
                              'hp_name': key[1],
                              'list_index': key[2],
                              'paste': paste_value,
-                             'share': value['share']}
+                             'share': share}
     return template
 
 
@@ -576,6 +595,13 @@ def create_one_combination_insertions(insert_template, hp_combination):
                 insert_template[insert_key]['paste'][hp_name[3]] = value
             else:
                 insert_template[insert_key]['paste'] = value
+        single_tmpl = insert_template[insert_key]
+        if single_tmpl['share'] is not None:
+            share = single_tmpl['share']
+            if share['hp_type'] == 'additional_placeholder':
+                share['paste']['value']['value'] = value
+            else:
+                share['paste']['value'] = value
     return combination_insertions
 
 
@@ -663,3 +689,8 @@ def create_all_args_for_launches(kwargs, all_insertions):
     for one_set_of_args_insertions in all_insertions:
         args_for_launches.append(create_1_set_of_args_for_launches(kwargs, one_set_of_args_insertions))
     return args_for_launches
+
+
+def apply_share(kwargs, share):
+    kwargs = insert_not_build_hp(kwargs, share)
+    return kwargs
