@@ -125,28 +125,13 @@ class Lstm(Model):
         return dict()
 
     @staticmethod
-    def form_list_of_kwargs(kwargs_for_building, build_hyperparameters):
-        output = [(construct(kwargs_for_building), dict(), list())]
-        lengths = list()
-        for name, values in build_hyperparameters.items():
-            new_output = list()
-            lengths.append(len(values))
-            for base in output:
-                for idx, value in enumerate(values):
-                    new_base = construct(base)
-                    new_base[0][name] = value
-                    new_base[1][name] = value
-                    new_base[2].append(idx)
-                    new_output.append(new_base)
-            output = new_output
-        sorting_factors = [1]
-        for length in reversed(lengths[1:]):
-            sorting_factors.append(sorting_factors[-1] * length)
-        output = sorted(output,
-                        key=lambda set: sum(
-                            [point_idx*sorting_factor \
-                             for point_idx, sorting_factor in zip(reversed(set[2][1:]), sorting_factors)]))
-        return output
+    def form_kwargs(kwargs_for_building, insertions):
+        for insertion in insertions:
+            if insertion['list_index'] is None:
+                kwargs_for_building[insertion['hp_name']] = insertion['paste']
+            else:
+                kwargs_for_building[insertion['hp_name']][insertion['list_index']] = insertion['paste']
+        return kwargs_for_building
 
     def _lstm_layer(self, inp, state, layer_idx):
         with tf.name_scope('lstm_layer_%s' % layer_idx):

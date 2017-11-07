@@ -1,5 +1,5 @@
 from environment import Environment
-from lstm import Lstm, LstmBatchGenerator
+from lstm_go import Lstm, LstmBatchGenerator
 from some_useful_functions import create_vocabulary, get_positions_in_vocabulary
 
 f = open('datasets/ted.txt', 'r', encoding='utf-8')
@@ -42,14 +42,12 @@ kwargs_for_building = dict(
           num_unrollings=30,
           init_parameter=3.)
 
-#list_of_lr = [dict(type='exponential_decay', init=v, decay=.9, period=500) for v in [10., 5., 3., 1., .3]]
-list_of_lr = [dict(type='exponential_decay', init=v, decay=.9, period=500) for v in [.001, .0015, .002]]
 
-env.several_launches(evaluation,
+env.grid_search(evaluation,
                      kwargs_for_building,
                      #build_hyperparameters={'init_parameter': [.01, .03, .1, .3, 1., 3.]},
-                     build_hyperparameters={'regularization_rate': [.001, .01, .03, .1, .3, 1., 3., 10.]},
-                     other_hyperparameters={'learning_rate': list_of_lr},
+                     build_hyperparameters={'regularization_rate': [.000001, .000003, .00001, .00003, .0001, .0003, .001]},
+                     learning_rate={'type': 'exponential_decay', 'period': 1000, 'init': .002},
                      batch_size=64,
                      result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
                      vocabulary=vocabulary,
@@ -61,3 +59,20 @@ env.several_launches(evaluation,
                      validation_dataset_texts=[valid_text],
                      no_validation=False,
                      additional_feed_dict=None)
+
+# env.grid_search(evaluation,
+#                      kwargs_for_building,
+#                      #build_hyperparameters={'init_parameter': [.01, .03, .1, .3, 1., 3.]},
+#                      build_hyperparameters={'dropout': [.3, .5, .7, .8, .9, .95]},
+#                      learning_rate={'type': 'exponential_decay', 'period': 1000, 'init': .002},
+#                      batch_size=64,
+#                      result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
+#                      vocabulary=vocabulary,
+#                      stop=1000,
+#                      num_unrollings=30,
+#                      train_dataset_text=train_text,
+#                      printed_result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
+#                      results_collect_interval=100,
+#                      validation_dataset_texts=[valid_text],
+#                      no_validation=False,
+#                      additional_feed_dict=None)
