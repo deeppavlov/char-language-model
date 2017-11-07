@@ -1,6 +1,7 @@
 import numpy as np
 import re
 import multiprocessing as mp
+from collections import OrderedDict
 
 import tensorflow as tf
 from tensorflow.python import debug as tf_debug
@@ -10,7 +11,7 @@ from some_useful_functions import (construct, add_index_to_filename_if_needed, m
                                    apply_temperature, sample)
 from args_parsing import parse_1_set_of_kwargs, parse_train_method_arguments, \
     formalize_and_create_insertions_for_build_hps, formalize_and_create_insertions_for_other_hps, \
-    create_all_args_for_launches, apply_shares
+    create_all_args_for_launches, configure_args_for_launches
 from handler import Handler
 
 
@@ -96,7 +97,8 @@ class Controller(object):
         else:
             return False
 
-    def _always_false(self):
+    @staticmethod
+    def _always_false():
         return False
 
     @property
@@ -630,7 +632,7 @@ class Environment(object):
 
     def test(self,
              **kwargs):
-        self._store_launch_parameters(kwargs)
+        self._store_launch_parameters(**kwargs)
         tmp_output = parse_1_set_of_kwargs(self,
                                            kwargs,
                                            'test',
@@ -1305,44 +1307,63 @@ class Environment(object):
         self._handler.log_launch()
         # print('build_insertions:', build_insertions)
         # print('build_hp_combs:', build_hp_combs)
-        for one_set_of_insertions_and_shares, build_hp_comb in zip(build_insertions, build_hp_combs):
-            # print('one_set_of_insertions_and_shares:', one_set_of_insertions_and_shares)
-            # print('build_hp_comb:', build_hp_comb)
-            only_build_insertions = list()
-            shares = list()
-            for insertion, share in one_set_of_insertions_and_shares:
-                only_build_insertions.append(insertion)
-                shares.append(share)
-            build_kwargs = self._pupil_class.form_kwargs(construct(kwargs_for_building),
-                                                         only_build_insertions)
-            args_for_launches_to_be_used = construct(args_for_launches)
-            parsed = list()
-            for to_be_used in args_for_launches_to_be_used:
-                with_shares = apply_shares(to_be_used, shares)
-                one_parsed = parse_train_method_arguments(self,
-                                                          [],
-                                                          with_shares,
-                                                          set_passed_parameters_as_default=False)
-                start_specs = one_parsed['start_specs']
-                run_specs_set = one_parsed['run']
-                parsed.append((start_specs, run_specs_set))
+        if len(build_hp_combs) > 0:
+            for one_set_of_insertions_and_shares, build_hp_comb in zip(build_insertions, build_hp_combs):
+                # print('one_set_of_insertions_and_shares:', one_set_of_insertions_and_shares)
+                # print('build_hp_comb:', build_hp_comb)
+                only_build_insertions = list()
+                shares = list()
+                for insertion, share in one_set_of_insertions_and_shares:
+                    only_build_insertions.append(insertion)
+                    shares.append(share)
+                build_kwargs = self._pupil_class.form_kwargs(construct(kwargs_for_building),
+                                                             only_build_insertions)
+                parsed = configure_args_for_launches(self, args_for_launches, shares)
+                queue = mp.Queue()
+                # from some_useful_functions import nested2string
+                # print('build_kwargs:', nested2string(build_kwargs))
+                # print('parsed:', nested2string(parsed))
+                self.mp_debug_flag += 1
+                p = mp.Process(target=self._several_launches_without_rebuilding,
+                               args=(queue, build_kwargs, session_specs, parsed, evaluation))
+                p.start()
+                if len(other_hp_combs) > 0:
+                    for idx, other_hp_comb in enumerate(other_hp_combs):
+                        hp_combination = construct(build_hp_comb)
+                        hp_combination.update(other_hp_comb)
+                        res = queue.get()
+                        # print('\nidx: %s\nres: %s' % (idx, res))
+                        # print('hp_combination:', hp_combination)
+                        # print('res:', res)
+                        self._handler.process_results(hp_combination, res, regime='several_launches')
+                else:
+                    hp_combination = construct(build_hp_comb)
+                    res = queue.get()
+                    self._handler.process_results(hp_combination, res, regime='several_launches')
+                p.join()
+        else:
+            parsed = configure_args_for_launches(self, args_for_launches, list())
             queue = mp.Queue()
             # from some_useful_functions import nested2string
             # print('build_kwargs:', nested2string(build_kwargs))
             # print('parsed:', nested2string(parsed))
             self.mp_debug_flag += 1
             p = mp.Process(target=self._several_launches_without_rebuilding,
-                           args=(queue, build_kwargs, session_specs, parsed, evaluation))
+                           args=(queue, kwargs_for_building, session_specs, parsed, evaluation))
             p.start()
-            for idx, other_hp_comb in enumerate(other_hp_combs):
-                hp_combination = construct(build_hp_comb)
-                hp_combination.update(other_hp_comb)
-                res = queue.get()
-                # print('\nidx: %s\nres: %s' % (idx, res))
-                # print('hp_combination:', hp_combination)
-                # print('res:', res)
-                self._handler.process_results(hp_combination, res,  regime='several_launches')
+            if len(other_hp_combs) > 0:
+                for idx, other_hp_comb in enumerate(other_hp_combs):
+                    hp_combination = OrderedDict()
+                    hp_combination.update(other_hp_comb)
+                    res = queue.get()
+                    # print('\nidx: %s\nres: %s' % (idx, res))
+                    # print('hp_combination:', hp_combination)
+                    # print('res:', res)
+                    self._handler.process_results(hp_combination, res, regime='several_launches')
+            else:
+                pass
             p.join()
+
         self._handler.log_finish_time()
         self._handler.close()
 
@@ -1430,7 +1451,9 @@ class Environment(object):
                                        restore_path,
                                        save_path,
                                        vocabulary=None,
-                                       additions_to_feed_dict=dict()):
+                                       additions_to_feed_dict=None):
+        if additions_to_feed_dict is None:
+            additions_to_feed_dict = dict()
         if vocabulary is None and self._vocabulary is None:
             raise InvalidArgumentError(
                 'Vocabulary has to be provided either to Environment constructor' +

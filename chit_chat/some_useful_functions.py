@@ -139,7 +139,11 @@ def check_not_one_byte(text):
 
 def construct(obj):
     """Used for preventing of not expected changing of class attributes"""
-    if isinstance(obj, dict):
+    if isinstance(obj, OrderedDict):
+        new_obj = OrderedDict()
+        for key, value in obj.items():
+            new_obj[key] = construct(value)
+    elif not isinstance(obj, OrderedDict) and isinstance(obj, dict):
         new_obj = dict()
         for key, value in obj.items():
             new_obj[key] = construct(value)

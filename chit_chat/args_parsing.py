@@ -757,8 +757,11 @@ def create_1_set_of_args_for_launches(kwargs, one_set_of_args_insertions):
 
 def create_all_args_for_launches(kwargs, all_insertions):
     args_for_launches = list()
-    for one_set_of_args_insertions in all_insertions:
-        args_for_launches.append(create_1_set_of_args_for_launches(kwargs, one_set_of_args_insertions))
+    if len(all_insertions) > 0:
+        for one_set_of_kwargs_insertions in all_insertions:
+            args_for_launches.append(create_1_set_of_args_for_launches(kwargs, one_set_of_kwargs_insertions))
+    else:
+        args_for_launches.append(kwargs)
     return args_for_launches
 
 
@@ -772,3 +775,19 @@ def apply_shares(kwargs, shares):
     for share in shares:
         kwargs = apply_share(kwargs, share)
     return kwargs
+
+
+def configure_args_for_launches(env_instance, args_for_launches, shares):
+    args_for_launches_to_be_used = construct(args_for_launches)
+    parsed = list()
+    for to_be_used in args_for_launches_to_be_used:
+        with_shares = apply_shares(to_be_used, shares)
+        one_parsed = parse_train_method_arguments(env_instance,
+                                                  [],
+                                                  with_shares,
+                                                  set_passed_parameters_as_default=False)
+        start_specs = one_parsed['start_specs']
+        run_specs_set = one_parsed['run']
+        del one_parsed['session_specs']
+        parsed.append((start_specs, run_specs_set))
+    return parsed
