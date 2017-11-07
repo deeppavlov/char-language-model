@@ -125,10 +125,12 @@ class Lstm(Model):
 
     @staticmethod
     def form_kwargs(kwargs_for_building, insertions):
-        kwargs = construct(kwargs_for_building)
         for insertion in insertions:
-            kwargs[insertion['hp_name']][insertion['list_index']] = insertion['paste']
-        return kwargs
+            if insertion['list_index'] is None:
+                kwargs_for_building[insertion['hp_name']] = insertion['paste']
+            else:
+                kwargs_for_building[insertion['hp_name']][insertion['list_index']] = insertion['paste']
+        return kwargs_for_building
 
     def _lstm_layer(self, inp, state, layer_idx):
         with tf.name_scope('lstm_layer_%s' % layer_idx):

@@ -10,7 +10,7 @@ from some_useful_functions import (construct, add_index_to_filename_if_needed, m
                                    apply_temperature, sample)
 from args_parsing import parse_1_set_of_kwargs, parse_train_method_arguments, \
     formalize_and_create_insertions_for_build_hps, formalize_and_create_insertions_for_other_hps, \
-    create_all_args_for_launches, apply_share
+    create_all_args_for_launches, apply_shares
 from handler import Handler
 
 
@@ -432,6 +432,8 @@ class Environment(object):
         self.current_build_parameters = None
         self.current_launch_parameters = None
 
+        self.mp_debug_flag = 0
+
     def build(self, **kwargs):
         """A method building the graph
         Args:
@@ -595,7 +597,10 @@ class Environment(object):
             d[key] = value
 
     def append_to_storage(self, dataset_name, **kwargs):
-        d = self._storage[dataset_name]
+        if dataset_name is not None:
+            d = self._storage[dataset_name]
+        else:
+            d = self._storage
         for key, value in kwargs.items():
             d[key].append(value)
 
@@ -752,7 +757,8 @@ class Environment(object):
             validation_operations = self._handler.get_tensors('validation', step)
             feed_dict = {self._pupil_hooks['validation_inputs']: inputs,
                          self._pupil_hooks['validation_labels']: labels}
-            feed_dict.update(additional_feed_dict)
+            if isinstance(additional_feed_dict, dict):
+                feed_dict.update(additional_feed_dict)
             valid_res = self._session.run(validation_operations, feed_dict=feed_dict)
             self._handler.process_results(training_step, valid_res, regime='validation')
             step += 1
@@ -1253,20 +1259,18 @@ class Environment(object):
                     return False
         return True
 
-    def several_launches(self,
-                         evaluation,
-                         kwargs_for_building,
-                         args_for_launches=None,
-                         build_hyperparameters=None,
-                         other_hyperparameters=None,
-                         **kwargs):
+    def grid_search(self,
+                    evaluation,
+                    kwargs_for_building,
+                    build_hyperparameters=None,
+                    other_hyperparameters=None,
+                    **kwargs):
         if build_hyperparameters is None:
             build_hyperparameters = dict()
         if other_hyperparameters is None:
             other_hyperparameters = dict()
         self._store_launch_parameters(evaluation=evaluation,
                                       kwargs_for_building=kwargs_for_building,
-                                      args_for_launches=args_for_launches,
                                       build_hyperparameters=build_hyperparameters,
                                       other_hyperparameters=other_hyperparameters,
                                       kwargs=kwargs)
@@ -1278,6 +1282,11 @@ class Environment(object):
 
         build_hp_combs, build_insertions = formalize_and_create_insertions_for_build_hps(build_hyperparameters)
         other_hp_combs, other_insertions = formalize_and_create_insertions_for_other_hps(other_hyperparameters)
+        # print('Environment.grid_search')
+        # print('build_hp_combs:', build_hp_combs)
+        # print('build_insertions:', build_insertions)
+        # print('other_hp_combs:', other_hp_combs)
+        # print('other_insertions:', other_insertions)
 
         args_for_launches = create_all_args_for_launches(kwargs, other_insertions)
 
@@ -1294,30 +1303,45 @@ class Environment(object):
                                 eval_dataset_names=list(evaluation['datasets'].keys()),
                                 hyperparameters=hps)
         self._handler.log_launch()
-        for (one_set_of_build_insertions, share), build_hp_comb in zip(build_insertions, build_hp_combs):
-            build_kwargs = self._pupil_class.form_kwargs(kwargs_for_building,
-                                                         one_set_of_build_insertions)
-            applied_args_for_launches = construct(args_for_launches)
+        # print('build_insertions:', build_insertions)
+        # print('build_hp_combs:', build_hp_combs)
+        for one_set_of_insertions_and_shares, build_hp_comb in zip(build_insertions, build_hp_combs):
+            # print('one_set_of_insertions_and_shares:', one_set_of_insertions_and_shares)
+            # print('build_hp_comb:', build_hp_comb)
+            only_build_insertions = list()
+            shares = list()
+            for insertion, share in one_set_of_insertions_and_shares:
+                only_build_insertions.append(insertion)
+                shares.append(share)
+            build_kwargs = self._pupil_class.form_kwargs(construct(kwargs_for_building),
+                                                         only_build_insertions)
+            args_for_launches_to_be_used = construct(args_for_launches)
             parsed = list()
-            for applied in applied_args_for_launches:
-                with_share = apply_share(applied, share)
+            for to_be_used in args_for_launches_to_be_used:
+                with_shares = apply_shares(to_be_used, shares)
                 one_parsed = parse_train_method_arguments(self,
                                                           [],
-                                                          with_share,
+                                                          with_shares,
                                                           set_passed_parameters_as_default=False)
                 start_specs = one_parsed['start_specs']
                 run_specs_set = one_parsed['run']
                 parsed.append((start_specs, run_specs_set))
             queue = mp.Queue()
+            # from some_useful_functions import nested2string
+            # print('build_kwargs:', nested2string(build_kwargs))
+            # print('parsed:', nested2string(parsed))
+            self.mp_debug_flag += 1
             p = mp.Process(target=self._several_launches_without_rebuilding,
-                           args=(queue, build_kwargs, session_specs, args_for_launches, evaluation))
+                           args=(queue, build_kwargs, session_specs, parsed, evaluation))
             p.start()
             for idx, other_hp_comb in enumerate(other_hp_combs):
                 hp_combination = construct(build_hp_comb)
                 hp_combination.update(other_hp_comb)
                 res = queue.get()
-                print('\nidx: %s\nres: %s' % (idx, res))
-                self._handler.process_results(hp_combination, res, regime='several_launches')
+                # print('\nidx: %s\nres: %s' % (idx, res))
+                # print('hp_combination:', hp_combination)
+                # print('res:', res)
+                self._handler.process_results(hp_combination, res,  regime='several_launches')
             p.join()
         self._handler.log_finish_time()
         self._handler.close()

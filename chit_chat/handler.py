@@ -1,5 +1,6 @@
 import tensorflow as tf
 import datetime as dt
+# import os
 from some_useful_functions import create_path, add_index_to_filename_if_needed, construct, nested2string
 
 class Handler(object):
@@ -30,6 +31,7 @@ class Handler(object):
                  fuse_tensor_schedule=None,
                  fuse_file_name=None):
         continuous_chit_chat = ['simple_fontain']
+        # print('Initializing Handler! pid = %s' % os.getpid())
         self._processing_type = processing_type
         self._environment_instance = environment_instance
         self._save_path = save_path
@@ -104,6 +106,7 @@ class Handler(object):
             self._training_step = None
             self._accumulation_is_performed = False
             self._accumulated_tensors = dict()
+            self._print_order = ['loss', 'bpc', 'perplexity', 'accuracy']
             self._accumulated = dict(loss=None, perplexity=None, accuracy=None)
             if self._bpc:
                 self._accumulated['bpc'] = None
@@ -149,13 +152,20 @@ class Handler(object):
                 self._order.extend(self._hyperparameters)
 
             create_path(self._save_path)
-            self._file_descriptors = dict()
+            self._file_names = dict()
             self._tmpl = '%s '*(len(self._order) - 1) + '%s\n'
-            result_names = [self._hyperparameter_name_string(result_type) for result_type in self._order]
+            result_names = list()
+            for result_type in self._order:
+                if not isinstance(result_type, tuple):
+                    result_names.append(result_type)
+                else:
+                    result_names.append(self._hyperparameter_name_string(result_type))
             for dataset_name in eval_dataset_names:
-                self._file_descriptors[dataset_name] = open(self._save_path + '/' + dataset_name + '.txt',
-                                                            'a')
-                self._file_descriptors[dataset_name].write(self._tmpl % tuple(result_names))
+                self._file_names[dataset_name] = self._save_path + '/' + dataset_name + '.txt'
+                fd = open(self._file_names[dataset_name],
+                          'a')
+                fd.write(self._tmpl % tuple(result_names))
+                fd.close()
             self._environment_instance.set_in_storage(launches=list())
 
         # The order in which tensors are presented in the list returned by get_additional_tensors method
@@ -417,7 +427,8 @@ class Handler(object):
             all_together.update(res)
             for key in self._order:
                 values.append(all_together[key])
-            self._file_descriptors[dataset_name].write(self._tmpl % tuple(values))
+            with open(self._file_names[dataset_name], 'a') as fd:
+                fd.write(self._tmpl % tuple(values))
 
     def _save_several_data(self,
                            descriptors,
@@ -546,9 +557,13 @@ class Handler(object):
 
     @staticmethod
     def _hyperparameter_name_string(name):
-        if not isinstance(name, tuple):
-            return name
-        return name[0] + '/' + name[1]
+        # print('(Handler._hyperparameter_name_string)name:', name)
+        string = name[1]
+        if name[2] is not None:
+            string += '[%s]' % name[2]
+        if name[3] is not None:
+            string += '/' + name[3]
+        return string
 
     def _print_launch_results(self, results, hp, idx=None, indent=2):
         if indent != 0:
@@ -596,8 +611,14 @@ class Handler(object):
         if 'message' in kwargs:
             print(kwargs['message'])
         for key, value in kwargs.items():
-            if key != 'tensors' and key != 'step' and key != 'message' and key in self._printed_result_types:
+            if key != 'tensors' and\
+                            key != 'step' and \
+                            key != 'message' and \
+                            key in self._printed_result_types and \
+                            key not in self._print_order:
                 print('%s:' % key, value)
+        for key in self._print_order:
+            print('%s:' % key, kwargs[key])
         if 'tensors' in kwargs:
             self._print_tensors(kwargs['tensors'], self._train_tensor_schedule)
         for _ in range(indents[1]):
@@ -745,7 +766,7 @@ class Handler(object):
                                     indent=1)
 
     def _several_launches_results_processing(self, hp, results):
-        self._environment_instance.append_to_storage(launches=(results, hp))
+        self._environment_instance.append_to_storage(None, launches=(results, hp))
         self._save_launch_results(results, hp)
         self._print_launch_results(results, hp)
 
@@ -769,7 +790,7 @@ class Handler(object):
 
     def log_launch(self):
         if self._save_path is None:
-            print('Warning! Launch is not logged because save_path was provided to Handler constructor')
+            print('\nWarning! Launch is not logged because save_path was not provided to Handler constructor')
         else:
             self._current_log_path = add_index_to_filename_if_needed(self._save_path + '/launch_log.txt')
             with open(self._current_log_path, 'w') as f:
@@ -800,7 +821,7 @@ class Handler(object):
         if self._processing_type == 'train':
             for file in self._train_files.values():
                 file.close()
-        if self._processing_type == 'test' or self._dataset_specific == 'train':
+        if self._processing_type == 'test' or self._processing_type == 'train':
             for dataset in self._dataset_specific.values():
                 for file_d in dataset['files'].values():
                     file_d.close()

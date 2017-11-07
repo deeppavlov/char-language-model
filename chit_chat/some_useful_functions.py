@@ -1,6 +1,7 @@
 import numpy as np
 import inspect
 import os
+from collections import OrderedDict
 import tensorflow as tf
 from tensorflow.python.client import device_lib
 
@@ -584,7 +585,7 @@ def recur_entries(nested, all_entries):
 
 
 def unite_dicts(list_of_dicts):
-    new_dict = dict()
+    new_dict = OrderedDict()
     for d in list_of_dicts:
         new_dict.update(d)
     return new_dict

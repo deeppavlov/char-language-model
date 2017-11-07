@@ -331,6 +331,7 @@ def process_build_hp_abbreviations(build_hps):
                 if 'controller' not in hp_values_and_specs['share']:
                     hp_values_and_specs['share']['controller'] = True
             new_build_hps[hp_name] = hp_values_and_specs
+    new_build_hps = reshape_1_index_hps(new_build_hps)
     return new_build_hps
 
 
@@ -385,9 +386,24 @@ def expand_varying_entry(hps):
     return new_hps
 
 
+def reshape_1_index_hps(hps):
+    for hp_values_and_specs in hps.values():
+        if hp_values_and_specs['list_indices'] is not None:
+            if len(hp_values_and_specs['list_indices']) == 1:
+                varying = hp_values_and_specs['varying']
+                if isinstance(varying, list):
+                    hp_values_and_specs['varying'] = [varying]
+                else:
+                    for spec_name, values in varying.items():
+                        varying[spec_name] = [values]
+                    hp_values_and_specs['varying'] = varying
+    return hps
+
+
 def process_other_hp_abbreviations(other_hps):
     other_hps = process_other_hp_specs_absences(other_hps)
     other_hps = expand_varying_entry(other_hps)
+    other_hps = reshape_1_index_hps(other_hps)
     return other_hps
 
 
@@ -404,7 +420,7 @@ def create_controller_template(hp_name, hp_specs_and_values):
 
 def create_insert_instructions(hps):
     insert_instructions = dict()
-    for hp_name, hp_specs_and_values in hps:
+    for hp_name, hp_specs_and_values in hps.items():
         hp_insert_instructions = dict()
         if hp_specs_and_values['controller']:
             template = create_controller_template(hp_name, hp_specs_and_values)
@@ -433,6 +449,9 @@ def create_hp_type_groups(insert_instructions):
 
 
 def extract_and_sort_values(formalized_name, hp_specs_and_values):
+    # print('\nextract_and_sort_values')
+    # print('formalized_name:', formalized_name)
+    # print('hp_specs_and_values:', hp_specs_and_values)
     varying = hp_specs_and_values['varying']
     if formalized_name[2] is None:
         if formalized_name[3] is None:
@@ -440,13 +459,17 @@ def extract_and_sort_values(formalized_name, hp_specs_and_values):
         else:
             return sorted(varying[formalized_name[3]])
     else:
+        values_set_index = hp_specs_and_values['list_indices'].index(formalized_name[2])
         if formalized_name[3] is None:
-            return sorted(varying[formalized_name[2]])
+            return sorted(varying[values_set_index])
         else:
-            return sorted(varying[formalized_name[3]][formalized_name[2]])
+            return sorted(varying[formalized_name[3]][values_set_index])
 
 
 def separate_hps(hp_name, hp_specs_and_values):
+    # print('\nseparate_hps')
+    # print('hp_name:', hp_name)
+    # print('hp_specs_and_values:', hp_specs_and_values)
     hp_type = hp_specs_and_values['hp_type']
     list_indices = hp_specs_and_values['list_indices']
     if list_indices is None:
@@ -463,6 +486,7 @@ def separate_hps(hp_name, hp_specs_and_values):
     formalized_hp = dict()
     for name in formalized_names:
         formalized_hp[name] = extract_and_sort_values(name, hp_specs_and_values)
+    # print('end of separate hps\n')
     return formalized_hp
 
 
@@ -491,35 +515,55 @@ def split_to_groups_by_hp_type(hps_formalized):
 
 
 def split_to_groups_on_index(hps, index):
+    # print('\nsplit_to_groups_on_index')
+    # print('index:', index)
+    # print('hps:', hps)
     groups = list()
-    group = None
-    old_key_entry = None
+    group = OrderedDict()
+    old_key_entry = 'it_is_not_parameter_name_list_index_or_controller_specification'
     for key, value in hps.items():
         if key[index] != old_key_entry:
             groups.append(group)
             group = OrderedDict()
             old_key_entry = key[index]
         group[key] = value
+    groups.append(group)
+    groups = groups[1:]
+    # print('groups:', groups)
     return groups
 
 
 def sort(hps, index, key_length):
+    # print('\nsort')
+    # print('hps:', hps)
     hps = OrderedDict(sorted(hps.items(), key=lambda item: item[0][index]))
     if index < key_length - 1:
         groups = split_to_groups_on_index(hps, index)
+        # print('\nsort')
+        # print('groups:', groups)
         sorted_groups = list()
         for group in groups:
+            # print('group:', group)
             sorted_groups.append(sort(group, index+1, key_length))
+        # print('\nsort')
+        # print('sorted_groups:', sorted_groups)
+        print('index=%s, hps:' % index, unite_dicts(sorted_groups))
         return unite_dicts(sorted_groups)
+    print('index=%s, hps:' % index, hps)
     return hps
 
 
 def sort_hps(hps):
     """alphabetically, than by index, and finally by controller specification key"""
+    # print('\nsort_hps')
     if len(hps) > 0:
         key_length = len(list(hps.keys())[0])
+        # print('key_length:', key_length)
         hps = OrderedDict(hps.items())
+        # print('hps:', hps)
         hps = sort(hps, 1, key_length)
+        # print('(sort_hps)hps:', hps)
+        # print('\n')
         return hps
     return OrderedDict()
 
@@ -527,9 +571,13 @@ def sort_hps(hps):
 def expand(list_of_combinations, hp_name, values):
     new_combinations = list()
     for value in values:
-        for old_combination in list_of_combinations:
-            start = OrderedDict([(hp_name, value)])
-            new_combinations.append(start.update(old_combination))
+        if len(list_of_combinations) > 0:
+            for old_combination in list_of_combinations:
+                start = OrderedDict([(hp_name, value)])
+                start.update(old_combination)
+                new_combinations.append(start)
+        else:
+            new_combinations.append(OrderedDict([(hp_name, value)]))
     return new_combinations
 
 
@@ -541,8 +589,11 @@ def mix_hps(hps):
 
 
 def create_empty_insertions_template(insert_instructions):
+    # print('\ncreate_empty_insertions_template')
     template = dict()
     for key, value in insert_instructions.items():
+        # print('key:', key)
+        # print('value:', value)
         if value['controller_template'] is not None:
             paste_value = value['controller_template']
         else:
@@ -551,7 +602,7 @@ def create_empty_insertions_template(insert_instructions):
             share = None
         else:
             if value['share']['controller']:
-                if value['direction'] == 'additional_placeholder':
+                if value['share']['direction'] == 'additional_placeholder':
                     share_paste = {'placeholder': key[1],
                                    'value': {'type': 'fixed',
                                              'value': 'not_specified',
@@ -562,7 +613,7 @@ def create_empty_insertions_template(insert_instructions):
                                    'name': key[1]}
             else:
                 share_paste = 'not_specified'
-            share = {'hp_type': value['direction'],
+            share = {'hp_type': value['share']['direction'],
                      'hp_name': key[1],
                      'list_index': key[2],
                      'paste': share_paste}
@@ -582,47 +633,66 @@ def create_empty_insertions_template(insert_instructions):
 
 
 def create_one_combination_insertions(insert_template, hp_combination):
+    # print('\ncreate_one_combination_insertions')
     combination_insertions = construct(insert_template)
     for hp_name, value in hp_combination.items():
+        # print('hp_name:', hp_name)
+        # print('value:', value)
         insert_key = (hp_name[0], hp_name[1], hp_name[2])
+        single_tmpl = combination_insertions[insert_key]
+        # print('single_tmpl:', single_tmpl)
+        # print('hp_name[0]:', hp_name[0])
+        # print('hp_name[3]:', hp_name[3])
         if hp_name[0] == 'additional_placeholder':
             if hp_name[3] is not None:
-                insert_template[insert_key]['paste']['value'][hp_name[3]] = value
+                single_tmpl['paste']['value'][hp_name[3]] = value
             else:
-                insert_template[insert_key]['paste']['value'] = value
+                single_tmpl['paste']['value'] = value
         else:
             if hp_name[3] is not None:
-                insert_template[insert_key]['paste'][hp_name[3]] = value
+                single_tmpl['paste'][hp_name[3]] = value
             else:
-                insert_template[insert_key]['paste'] = value
-        single_tmpl = insert_template[insert_key]
+                single_tmpl['paste'] = value
         if single_tmpl['share'] is not None:
             share = single_tmpl['share']
             if share['hp_type'] == 'additional_placeholder':
                 share['paste']['value']['value'] = value
             else:
                 share['paste']['value'] = value
+    # print('\n')
     return combination_insertions
 
 
 def create_insertions(insert_instructions, hp_combinations):
+    # print('\ncreate_insertions')
     insertions = list()
     insert_template = create_empty_insertions_template(insert_instructions)
     for hp_combination in hp_combinations:
+        # print('insert_template:', insert_template)
         insertions.append(list(create_one_combination_insertions(insert_template, hp_combination).values()))
+    # print('\n')
     return insertions
 
 
 def formalize_and_create_insertions(hps):
+    # print('\nformalize_and_create_insertions')
     insert_instructions = create_insert_instructions(hps)
+    # print('insert_instructions:', insert_instructions)
     hps = separate_all_hps(hps)
+    # print('hps:', hps)
     hps_by_groups = split_to_groups_by_hp_type(hps)
+    # print('hps_by_groups:', hps_by_groups)
     hps = OrderedDict()
     for hp_group in hps_by_groups:
         hp_group = sort_hps(hp_group)
+        # print('hp_group:', hp_group)
         hps.update(hp_group)
+    # print('(formalize_and_create_insertions) before mixing hps:', hps)
     hp_combinations = mix_hps(hps)
+    # print('hp_combinations:', hp_combinations)
     combination_insertions = create_insertions(insert_instructions, hp_combinations)
+    # print('combination_insertions:', combination_insertions)
+    # print('\n')
     return hp_combinations, combination_insertions
 
 
@@ -647,8 +717,13 @@ def post_process_build_insertions(combination_insertions):
 
 def formalize_and_create_insertions_for_build_hps(hps):
     hps = process_build_hp_abbreviations(hps)
+    # print('\nformalize_and_create_insertions_for_build_hps')
+    # print('hps:', hps)
     hp_combinations, combination_insertions = formalize_and_create_insertions(hps)
+    # print('hp_combinations:', hp_combinations)
+    # print('combination_insertions:', combination_insertions)
     post_processed_combination_insertions = post_process_build_insertions(combination_insertions)
+    # print('\n')
     return hp_combinations, post_processed_combination_insertions
 
 
@@ -669,11 +744,7 @@ def insert_not_build_hp(kwargs, one_hp_insertion):
     if one_hp_insertion['hp_type'] == 'additional_placeholder':
         if 'additions_to_feed_dict' not in kwargs:
             kwargs['additions_to_feed_dict'] = list()
-        if one_hp_insertion['list_index'] is None:
-            kwargs['additions_to_feed_dict'][one_hp_insertion['hp_name']] = one_hp_insertion['paste']
-        else:
-            kwargs['additions_to_feed_dict'][one_hp_insertion['hp_name']][one_hp_insertion['list_index']] = \
-                one_hp_insertion['paste']
+        kwargs['additions_to_feed_dict'].append(one_hp_insertion['paste'])
     return kwargs
 
 
@@ -692,5 +763,12 @@ def create_all_args_for_launches(kwargs, all_insertions):
 
 
 def apply_share(kwargs, share):
-    kwargs = insert_not_build_hp(kwargs, share)
+    if share is not None:
+        kwargs = insert_not_build_hp(kwargs, share)
+    return kwargs
+
+
+def apply_shares(kwargs, shares):
+    for share in shares:
+        kwargs = apply_share(kwargs, share)
     return kwargs
