@@ -137,7 +137,7 @@ class Lstm(Model):
             matr = self._lstm_matrices[layer_idx]
             bias = self._lstm_biases[layer_idx]
             nn = self._num_nodes[layer_idx]
-            x = tf.concat([inp, state[0]], 1, name='X')
+            x = tf.concat([tf.nn.dropout(inp, self.dropout_keep_prob), state[0]], 1, name='X')
             linear_res = tf.add(tf.matmul(x, matr, name='matmul'), bias, name='linear_res')
             [sigm_arg, tanh_arg] = tf.split(linear_res, [3*nn, nn], axis=1, name='split_to_act_func_args')
             sigm_res = tf.sigmoid(sigm_arg, name='sigm_res')
@@ -273,7 +273,7 @@ class Lstm(Model):
                  embedding_size=128,
                  num_unrollings=10,
                  init_parameter=3.,
-                 regularization_rate=.00001):
+                 regularization_rate=.000003):
         self._batch_size = batch_size
         self._num_layers = num_layers
         self._num_nodes = num_nodes
@@ -285,6 +285,7 @@ class Lstm(Model):
         self._init_parameter = init_parameter
         self._regularization_rate = regularization_rate
 
+        self.dropout_keep_prob = tf.placeholder(tf.float32, name='dropout_keep_prob')
         self._embedding_matrix = tf.Variable(
             tf.truncated_normal([self._vocabulary_size, self._embedding_size],
                                 stddev=self._init_parameter*np.sqrt(1./self._vocabulary_size)),
@@ -397,6 +398,7 @@ class Lstm(Model):
         hooks['validation_predictions'] = self.sample_prediction
         hooks['reset_validation_state'] = self.reset_sample_state
         hooks['randomize_sample_state'] = self.randomize
+        hooks['dropout'] = self.dropout_keep_prob
         hooks['saver'] = self.saver
         return hooks
 

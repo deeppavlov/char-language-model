@@ -287,7 +287,7 @@ class Lstm(Model):
                  embedding_size=128,
                  num_unrollings=10,
                  init_parameter=.3,
-                 regularization_rate=.00001):
+                 regularization_rate=.000003):
         self._batch_size = batch_size
         self._num_layers = num_layers
         self._num_nodes = num_nodes
