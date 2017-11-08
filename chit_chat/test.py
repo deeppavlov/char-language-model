@@ -69,7 +69,7 @@ evaluation = dict(
     batch_gen_class=BatchGenerator,
     batch_kwargs={'vocabulary': vocabulary},
     batch_size=1,
-    additional_feed_dict=None
+    additions_to_feed_dict=[{'type': 'fixed', 'name': 'dropout', 'value': 1.}]
 )
 
 kwargs_for_building = dict(
@@ -99,4 +99,4 @@ env.grid_search(evaluation,
                      results_collect_interval=25,
                      validation_dataset_texts=[valid_text],
                      no_validation=False,
-                     additional_feed_dict=None)
+                     additions_to_feed_dict=[{'type': 'fixed', 'name': 'dropout', 'value': 1.}])

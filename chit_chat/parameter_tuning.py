@@ -29,42 +29,26 @@ evaluation = dict(
     batch_gen_class=LstmBatchGenerator,
     batch_kwargs={'vocabulary': vocabulary},
     batch_size=1,
-    additional_feed_dict=None
+    additional_feed_dict=[{'placeholder': 'dropout', 'value': 1.}]
 )
 
 kwargs_for_building = dict(
           batch_size=64,
           num_layers=2,
-          num_nodes=[2000, 2000],
+          num_nodes=[200, 200],
           num_output_layers=2,
-          num_output_nodes=[1000],
+          num_output_nodes=[100],
           vocabulary_size=vocabulary_size,
           num_unrollings=30,
-          init_parameter=3.)
+          init_parameter=3.,
+          regularization_rate=.00001)
 
-
-env.grid_search(evaluation,
-                     kwargs_for_building,
-                     #build_hyperparameters={'init_parameter': [.01, .03, .1, .3, 1., 3.]},
-                     build_hyperparameters={'regularization_rate': [.000001, .000003, .00001, .00003, .0001, .0003, .001]},
-                     learning_rate={'type': 'exponential_decay', 'period': 1000, 'init': .002},
-                     batch_size=64,
-                     result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
-                     vocabulary=vocabulary,
-                     stop=1000,
-                     num_unrollings=30,
-                     train_dataset_text=train_text,
-                     printed_result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
-                     results_collect_interval=100,
-                     validation_dataset_texts=[valid_text],
-                     no_validation=False,
-                     additional_feed_dict=None)
 
 # env.grid_search(evaluation,
 #                      kwargs_for_building,
 #                      #build_hyperparameters={'init_parameter': [.01, .03, .1, .3, 1., 3.]},
-#                      build_hyperparameters={'dropout': [.3, .5, .7, .8, .9, .95]},
-#                      learning_rate={'type': 'exponential_decay', 'period': 1000, 'init': .002},
+#                      build_hyperparameters={'regularization_rate': [.000001, .000003, .00001, .00003, .0001, .0003, .001]},
+#                      learning_rate={'type': 'exponential_decay', 'period': 1000, 'init': .002, 'decay': .9},
 #                      batch_size=64,
 #                      result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
 #                      vocabulary=vocabulary,
@@ -75,4 +59,21 @@ env.grid_search(evaluation,
 #                      results_collect_interval=100,
 #                      validation_dataset_texts=[valid_text],
 #                      no_validation=False,
-#                      additional_feed_dict=None)
+#                      additions_to_feed_dict=[{'placeholder': 'dropout', 'value': {'type': 'fixed', 'name': 'dropout', 'value': 1.}}])
+
+env.grid_search(evaluation,
+                     kwargs_for_building,
+                     #build_hyperparameters={'init_parameter': [.01, .03, .1, .3, 1., 3.]},
+                     other_hyperparameters={'dropout': [.3, .5, .7, .8, .9, .95]},
+                     learning_rate={'type': 'exponential_decay', 'period': 1000, 'init': .002, 'decay': .9},
+                     batch_size=64,
+                     result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
+                     vocabulary=vocabulary,
+                     stop=1000,
+                     num_unrollings=30,
+                     train_dataset_text=train_text,
+                     printed_result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
+                     results_collect_interval=100,
+                     validation_dataset_texts=[valid_text],
+                     #additions_to_feed_dict=[{'placeholder': 'dropout', 'value': {'type': 'fixed', 'name': 'dropout', 'value': 1.}}],
+                     no_validation=True)

@@ -1211,6 +1211,8 @@ class Environment(object):
             eval_batch_gen_class = self._default_batch_generator
         else:
             eval_batch_gen_class = evaluation['batch_gen_class']
+
+        additional_feed_dict = self._form_validation_additional_feed_dict([], [], evaluation['additional_feed_dict'])
         for start_specs, run_specs_set in args_for_launches:
             result = dict()
             self._train_repeatedly(start_specs, run_specs_set)
@@ -1232,7 +1234,7 @@ class Environment(object):
                                        dataset,
                                        evaluation['batch_size'],
                                        evaluation['batch_kwargs'],
-                                       additional_feed_dict=evaluation['additional_feed_dict'],
+                                       additional_feed_dict=additional_feed_dict,
                                        save_to_file=False,
                                        save_to_storage=False,
                                        print_results=False)
