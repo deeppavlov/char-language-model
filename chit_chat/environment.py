@@ -692,6 +692,8 @@ class Environment(object):
                   training_step=None,
                   additional_feed_dict=dict()):
         for fuse_idx, fuse in enumerate(fuses):
+            if fuse_idx % 100 == 0:
+                print('Number of processed fuses:', fuse_idx)
             self._handler.set_processed_fuse_index(fuse_idx)
             for repeat_idx in range(fuse['num_repeats']):
                 if 'randomize_sample_state' in self._pupil_hooks:
