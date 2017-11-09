@@ -1457,7 +1457,8 @@ class Environment(object):
                                        restore_path,
                                        save_path,
                                        vocabulary=None,
-                                       additions_to_feed_dict=None):
+                                       additions_to_feed_dict=None,
+                                       gpu_memory=None):
         if additions_to_feed_dict is None:
             additions_to_feed_dict = dict()
         if vocabulary is None and self._vocabulary is None:
@@ -1509,7 +1510,8 @@ class Environment(object):
                                  additions_to_feed_dict=additions_to_feed_dict,
                                  printed_result_types=None,
                                  fuses=fuses,
-                                 random=None)
+                                 random=None,
+                                 gpu_memory=gpu_memory)
 
         generated_fd = open(add_index_to_filename_if_needed(save_path + '/generated.txt'), 'w')
         generated_text = ''
