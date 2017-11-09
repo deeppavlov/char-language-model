@@ -10,7 +10,7 @@ def set_controller_name_in_specs(controller_specs, name):
             controller_specs['name'] = name
 
 
-def process_abbreviation_in_1_entry(key, value):
+def process_abbreviation_in_1_entry(key, value, method_name):
     new_value = construct(value)
     if key == 'stop':
         if isinstance(value, int):
@@ -40,22 +40,23 @@ def process_abbreviation_in_1_entry(key, value):
         else:
             new_value = None
         set_controller_name_in_specs(new_value, 'debug')
-    if key == 'additions_to_feed_dict':
-        # print('inside additions_to_feed_dict shortcuts processing')
-        if new_value is not None:
-            for addition in new_value:
-                # print('addition:', addition)
-                if not isinstance(addition['value'], dict):
-                    # print('Removing of shortcut is happening now')
-                    addition['value'] = {'type': 'fixed', 'value': addition['value']}
-                    # print("addition['value']:", addition['value'])
-                set_controller_name_in_specs(addition['value'], addition['placeholder'])
+    if method_name == 'train':
+        if key == 'additions_to_feed_dict':
+            # print('inside additions_to_feed_dict shortcuts processing')
+            if new_value is not None:
+                for addition in new_value:
+                    # print('addition:', addition)
+                    if not isinstance(addition['value'], dict):
+                        # print('Removing of shortcut is happening now')
+                        addition['value'] = {'type': 'fixed', 'value': addition['value']}
+                        # print("addition['value']:", addition['value'])
+                    set_controller_name_in_specs(addition['value'], addition['placeholder'])
     return new_value
 
 
 def process_abbreviations(env_instance, set_of_kwargs, method_name):
     for key, value in set_of_kwargs.items():
-        value = process_abbreviation_in_1_entry(key, value)
+        value = process_abbreviation_in_1_entry(key, value, method_name)
         set_of_kwargs[key] = value
     if search_in_nested_dictionary(set_of_kwargs, 'summary') is None:
         add_graph_to_summary = search_in_nested_dictionary(set_of_kwargs, 'add_graph_to_summary')

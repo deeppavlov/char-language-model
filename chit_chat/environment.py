@@ -410,7 +410,7 @@ class Environment(object):
                              ['loss', 'perplexity', 'accuracy']),
                          'batch_generator_class': self._default_batch_generator,
                          'vocabulary': self._vocabulary},
-            work=dict(additions_to_feed_dict=dict(),
+            work=dict(additions_to_feed_dict=list(),
                       debug=None,
                       validation_datasets=None,
                       validation_batch_size=1,
@@ -639,7 +639,7 @@ class Environment(object):
                                            None,
                                            False)
         all_tensor_aliases = self._all_tensor_aliases_from_test_method_arguments(tmp_output)
-        print('all_tensor_aliases:', all_tensor_aliases)
+        # print('all_tensor_aliases:', all_tensor_aliases)
         self._create_missing_hooks(all_tensor_aliases)
         session_specs = tmp_output['session_specs']
         start_specs = tmp_output['start_specs']
@@ -652,8 +652,9 @@ class Environment(object):
                             session_specs['visible_device_list'])
         self._initialize_pupil(start_specs['restore_path'])
         add_feed_dict = dict()
-        for tensor_alias, value in work['additions_to_feed_dict'].items():
-            add_feed_dict[self._pupil_hooks[tensor_alias]] = value
+        # print("(Environment.test)work['additions_to_feed_dict']:", work['additions_to_feed_dict'])
+        for addition in work['additions_to_feed_dict']:
+            add_feed_dict[self._pupil_hooks[addition['placeholder']]] = addition['value']
         batch_generator_class = start_specs['batch_generator_class']
         self._handler = Handler(self,
                                 self._pupil_hooks,
@@ -703,6 +704,7 @@ class Environment(object):
                     feed_dict = {self._pupil_hooks['validation_inputs']: vec}
                     feed_dict.update(additional_feed_dict)
                     fuse_operations = self._handler.get_tensors('fuse', char_idx)
+                    # print('(_on_fuses)feed_dict:', feed_dict)
                     fuse_res = self._session.run(fuse_operations, feed_dict=feed_dict)
                     if char_idx == len(fuse['text']) - 1 and fuse['max_num_of_chars'] > 0:
                         self._handler.start_text_accumulation()
