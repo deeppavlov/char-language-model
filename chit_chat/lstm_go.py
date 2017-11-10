@@ -104,7 +104,7 @@ class Model(object):
 
     @classmethod
     def get_name(cls):
-        return cls.name
+        return cls._name
 
 
 class Lstm(Model):

@@ -187,8 +187,8 @@ evaluation = dict(
               'default_1': [valid_text, 'default_1']},
     batch_gen_class=SimpleFontainBatcher,
     batch_kwargs={'vocabulary': vocabulary},
-    batch_size=1,
-    additional_feed_dict=None
+    additional_feed_dict=[],
+    batch_size=1
 )
 
 kwargs_for_building = dict(
@@ -199,17 +199,16 @@ kwargs_for_building = dict(
           subsequence_length_in_intervals=7,
           characters_positions_in_vocabulary=cpiv)
 
-list_of_lr = [
-    dict(type='exponential_decay', init=v, decay=.9, period=500, name='learning_rate') for v in [.02, .01,
-                                                                                                 .005, .002, .001,
-                                                                                                 .0005, .0002]]
 # list_of_lr = [dict(type='exponential_decay', init=v, decay=.9, period=500, name='learning_rate') for v in [3.]]
 
-env.several_launches(evaluation,
+env.grid_search(evaluation,
                      kwargs_for_building,
-                     build_hyperparameters={'init_parameter': [.1, .3, .5, 1., 2., 4., 6., 8., 10.]},
+                     build_hyperparameters={'init_parameter': [3.]},
                      # build_hyperparameters={'init_parameter': [.3]},
-                     other_hyperparameters={'learning_rate': list_of_lr},
+                     other_hyperparameters={'learning_rate': {'hp_type': 'built-in',
+                                                              'type': 'exponential_decay',
+                                                              'fixed': {'period': 500, 'decay': .9},
+                                                              'varying': {'init': [.001, .002]}}},
                      batch_size=64,
                      result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
                      printed_result_types=['perplexity', 'loss', 'bpc', 'accuracy'],

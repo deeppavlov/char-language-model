@@ -184,54 +184,13 @@ class SimpleFontain(Model):
         return {'dialog_switch': True}
 
     @staticmethod
-    def form_list_of_kwargs(kwargs_for_building, build_hyperparameters):
-        output = [[kwargs_for_building]]
-        hp_names = list()
-        lengths = list()
-        for param_name, values in build_hyperparameters.items():
-            hp_names.append(param_name)
-            lengths.append(len(values))
-            new_output = list()
-            for idx, value in enumerate(values):
-                for base in output:
-                    new_base = construct(base)
-                    new_base[0][param_name] = value
-                    new_base.append(idx)
-                    new_output.append(new_base)
-            output = new_output
-        sorting_factors = [1]
-        for length in reversed(lengths[1:]):
-            sorting_factors.append(sorting_factors[-1] * length)
-
-        output = sorted(output,
-                        key=lambda set: sum(
-                            [point_idx*sorting_factor \
-                             for point_idx, sorting_factor in zip(reversed(set[1:], sorting_factors))]))
-        return output, hp_names
-
-    @staticmethod
-    def form_list_of_kwargs(kwargs_for_building, build_hyperparameters):
-        output = [(construct(kwargs_for_building), dict(), list())]
-        lengths = list()
-        for name, values in build_hyperparameters.items():
-            new_output = list()
-            lengths.append(len(values))
-            for base in output:
-                for idx, value in enumerate(values):
-                    new_base = construct(base)
-                    new_base[0][name] = value
-                    new_base[1][name] = value
-                    new_base[2].append(idx)
-                    new_output.append(new_base)
-            output = new_output
-        sorting_factors = [1]
-        for length in reversed(lengths[1:]):
-            sorting_factors.append(sorting_factors[-1] * length)
-        output = sorted(output,
-                        key=lambda set: sum(
-                            [point_idx*sorting_factor \
-                             for point_idx, sorting_factor in zip(reversed(set[2][1:]), sorting_factors)]))
-        return output
+    def form_kwargs(kwargs_for_building, insertions):
+        for insertion in insertions:
+            if insertion['list_index'] is None:
+                kwargs_for_building[insertion['hp_name']] = insertion['paste']
+            else:
+                kwargs_for_building[insertion['hp_name']][insertion['list_index']] = insertion['paste']
+        return kwargs_for_building
 
     def _layer(self,
                idx,
@@ -387,6 +346,27 @@ class SimpleFontain(Model):
                     save_list.append(tf.assign(variable, value, name='assign_save_%s' % name))
             return save_list
 
+    def _recurrent_assign_loop_with_dependencies(self, variables, new_values, control_operations):
+        with tf.control_dependencies(control_operations):
+            new_control_op = tf.assign(variables[0], new_values[0])
+            if len(variables) > 1:
+                s_list = self._recurrent_assign_loop_with_dependencies(variables[1:], new_values[1:], [new_control_op])
+            else:
+                s_list = list()
+            s_list.append(new_control_op)
+            return s_list
+
+    def _compose_save_list_secure(self,
+                                 *pairs):
+        with tf.name_scope('secure_save_list'):
+            save_list = list()
+            for pair in pairs:
+                variables = flatten(pair[0])
+                new_values = flatten(pair[1])
+                s_list = self._recurrent_assign_loop_with_dependencies(variables, new_values, [])
+                save_list.extend(s_list)
+            return save_list
+
     def _compose_reset_list(self, saved_last_sample_predictions, *args):
         with tf.name_scope('reset_list'):
             reset_list = list()
@@ -406,7 +386,8 @@ class SimpleFontain(Model):
     @staticmethod
     def _partial_zeroing_out(eod_flags,
                              tensor):
-        return (1. - eod_flags) * tensor
+        tensor_num_dims = len(tensor.get_shape().as_list())
+        return tf.reshape((1. - eod_flags), [-1] + [1]*(tensor_num_dims - 1)) * tensor
 
     def _zeroing_out_after_end_of_dialog(self,
                                          eod_flags,
@@ -422,13 +403,28 @@ class SimpleFontain(Model):
                 for component in layer_state:
                     new_layer_state.append(self._partial_zeroing_out(eod_flags, component))
                 new_state.append(tuple(new_layer_state))
-            new_for_attention = list()
-            for old in for_attention:
-                new_for_attention.append(self._partial_zeroing_out(eod_flags, old))
+            if isinstance(for_attention, list):
+                new_for_attention = list()
+                for old in for_attention:
+                    new_for_attention.append(self._partial_zeroing_out(eod_flags, old))
+            else:
+                new_for_attention = tf.transpose(
+                    self._partial_zeroing_out(eod_flags, tf.transpose(for_attention, perm=[1,0, 2])),
+                    perm=[1, 0, 2])
             new_from_attention = self._partial_zeroing_out(eod_flags, from_attention)
             new_list_of_predictions = list_of_predictions[:-1]
             new_list_of_predictions.append(self._partial_zeroing_out(eod_flags, list_of_predictions[-1]))
             return [new_state, new_for_attention, new_from_attention, new_list_of_predictions]
+
+    def _unpack_sample_for_connections(self, for_connections):
+        with tf.name_scope('unpacking_for_connections'):
+            final = tf.unstack(for_connections)
+            return final
+
+    @staticmethod
+    def _pack_sample_for_connections(for_connections):
+        with tf.name_scope('packing_for_connections'):
+            return tf.stack(for_connections)
 
     def __init__(self,
                  batch_size=64,
@@ -599,8 +595,8 @@ class SimpleFontain(Model):
                 list_of_predictions.append(predictions)
 
             save_list = self._compose_save_list([saved_last_predictions, list_of_predictions[-1]],
-                                                [saved_state, state],
-                                                [saved_for_attention, for_attention])
+                                                [saved_state, state])
+            save_list.extend(self._compose_save_list_secure([saved_for_attention, for_attention]))
             logits = tf.concat(list_of_logits, 0, name='all_logits')
             logits = tf.reshape(bot_answer_flags, [self._batch_size * self._num_unrollings, 1]) * logits
             number_of_bot_characters = tf.reduce_sum(bot_answer_flags)
@@ -643,11 +639,6 @@ class SimpleFontain(Model):
                                            tf.Variable(tf.zeros([1, self._num_nodes[i]]),
                                                        trainable=False,
                                                        name=saved_state_templ % (i, 1))))
-            saved_sample_for_attention = list()
-            for idx in range(self._attention_visibility + 1):
-                saved_sample_for_attention.append(tf.Variable(tf.zeros([1, sum(self._num_nodes)]),
-                                                              trainable=False,
-                                                              name='saved_sample_attention_%s' % idx))
 
             saved_last_sample_predictions = tf.Variable(
                 np.tile(char_2_base_vec(self._characters_positions_in_vocabulary,
@@ -661,12 +652,6 @@ class SimpleFontain(Model):
             self.sample_inputs = tf.placeholder(tf.float32, shape=[1, 1,
                                                                    self._vocabulary_size + self._flag_size + 2])
 
-            reset_list = self._compose_reset_list(saved_last_sample_predictions,
-                                                  saved_sample_state,
-                                                  saved_sample_for_attention,
-                                                  saved_sample_from_attention)
-            self.reset_sample_state = tf.group(*reset_list)
-
             tmp_output = tf.split(self.sample_inputs,
                                   [self._vocabulary_size + self._flag_size, 1, 1],
                                   axis=2)
@@ -675,24 +660,30 @@ class SimpleFontain(Model):
             sample_inputs = tf.reshape(sample_inputs, [1, self._vocabulary_size + self._flag_size])
             sample_eod_flags = tf.reshape(sample_eod_flags, [1, 1])
             sample_bot_answer_flags = tf.reshape(sample_bot_answer_flags, [1, 1])
-            sample_for_attention = list(saved_sample_for_attention)
 
-            reset_from_attention = tf.equal(saved_sample_counter % self._attention_interval, 0)
 
-            sample_hidden_states = [layer_state[0] for layer_state in saved_sample_state]
-            sample_from_attention = tf.cond(reset_from_attention,
-                                            true_fn=lambda: self._renew_attention_vec(sample_hidden_states,
-                                                                                      saved_sample_for_attention,
-                                                                                      0),
-                                            false_fn=lambda: saved_sample_from_attention)
+            it_is_time_to_reset_from_attention = tf.equal(tf.mod(saved_sample_counter, self._attention_interval), 0)
 
+
+            saved_sample_for_attention = tf.Variable(tf.zeros([self._attention_visibility, 1, sum(self._num_nodes)]),
+                                                     trainable=False,
+                                                     name='saved_sample_state')
             tmp_output = self._zeroing_out_after_end_of_dialog(sample_eod_flags,
                                                                saved_sample_state,
-                                                               sample_for_attention,
-                                                               sample_from_attention,
+                                                               saved_sample_for_attention,
+                                                               saved_sample_from_attention,
                                                                [saved_last_sample_predictions],
                                                                0)
             [sample_state, sample_for_attention, sample_from_attention, list_of_sample_predictions] = tmp_output
+            sample_hidden_states = [layer_state[0] for layer_state in saved_sample_state]
+            sample_from_attention = tf.cond(it_is_time_to_reset_from_attention,
+                                            true_fn=lambda: self._renew_attention_vec(sample_hidden_states,
+                                                                                      sample_for_attention,
+                                                                                      0),
+                                            false_fn=lambda: sample_from_attention)
+
+            sample_for_attention = self._unpack_sample_for_connections(saved_sample_for_attention)
+            sample_for_attention = list(sample_for_attention)
 
             tmp_output = self._iter(sample_inputs,
                                     sample_state,
@@ -703,17 +694,38 @@ class SimpleFontain(Model):
                                     saved_sample_counter)
 
             [sample_logits, sample_state, sample_counter] = tmp_output
-
+            sample_for_attention.append(tf.concat(sample_hidden_states, 1))
+            sample_for_attention = self._pack_sample_for_connections(sample_for_attention)
+            sample_for_attention = tf.cond(
+                it_is_time_to_reset_from_attention,
+                true_fn=lambda: tf.split(sample_for_attention, [1, self._attention_visibility], axis=0)[1],
+                false_fn=lambda: tf.split(sample_for_attention, [self._attention_visibility, 1], axis=0)[0]
+            )
             sample_save_list = self._compose_save_list([saved_last_sample_predictions,
                                                         tf.nn.softmax(sample_logits)],
                                                        [saved_sample_state, sample_state],
-                                                       [saved_sample_for_attention, sample_for_attention],
                                                        [saved_sample_from_attention, sample_from_attention],
                                                        [saved_sample_counter, sample_counter])
+            sample_save_list.extend(self._compose_save_list_secure([saved_sample_for_attention, sample_for_attention]))
 
+
+            reset_list = self._compose_reset_list(saved_last_sample_predictions,
+                                                  saved_sample_state,
+                                                  saved_sample_for_attention,
+                                                  saved_sample_from_attention)
+            self.reset_sample_state = tf.group(*reset_list)
             with tf.control_dependencies(sample_save_list):
                 self.sample_predictions = tf.nn.softmax(sample_logits)
-        self.saver = tf.train.Saver(max_to_keep=None)
+        saved_var_list = list(self.Matrices)
+        saved_var_list.extend(self.Biases)
+        saved_var_list.append(self._embedding_matrix)
+        saved_var_list.append(self._embedding_bias)
+        saved_var_list.append(self._output_embedding_matrix)
+        saved_var_list.append(self._output_embedding_bias)
+        saved_var_list.append(self._output_gates_matrix)
+        saved_var_list.append(self._output_matrix)
+        saved_var_list.append(self._output_bias)
+        self.saver = tf.train.Saver(saved_var_list, max_to_keep=None)
 
     def get_default_hooks(self):
         hooks = dict()
