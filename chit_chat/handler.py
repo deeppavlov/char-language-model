@@ -51,27 +51,12 @@ class Handler(object):
         if self._processing_type == 'train':
             self._train_files = dict()
             if self._save_path is not None:
-                self._train_files['loss'] = open(self._save_path +
-                                                 '/' +
-                                                 'loss_train.txt',
-                                                 'a')
-                self._train_files['perplexity'] = open(self._save_path +
-                                                       '/' +
-                                                       'perplexity_train.txt',
-                                                       'a')
-                self._train_files['accuracy'] = open(self._save_path +
-                                                     '/' +
-                                                     'accuracy_train.txt',
-                                                     'a')
+                self._train_files['loss'] = self._save_path + '/' + 'loss_train.txt'
+                self._train_files['perplexity'] = self._save_path + '/' + 'perplexity_train.txt'
+                self._train_files['accuracy'] = self._save_path + '/' + 'accuracy_train.txt'
                 if self._bpc:
-                    self._train_files['bpc'] = open(self._save_path +
-                                                    '/' +
-                                                    'bpc_train.txt',
-                                                    'a')
-                self._train_files['pickle_tensors'] = open(self._save_path +
-                                                           '/' +
-                                                           'tensors_train.pickle',
-                                                           'ab')
+                    self._train_files['bpc'] = self._save_path + '/' + 'bpc_train.txt'
+                self._train_files['pickle_tensors'] = self._save_path + '/' + 'tensors_train.pickle'
             self._train_dataset_name = None
             self._dataset_specific = dict()
             self._controllers = None
@@ -182,27 +167,14 @@ class Handler(object):
                 if dataset_name not in self._dataset_specific.keys():
                     new_files = dict()
                     if self._save_path is not None:
-                        new_files['loss'] = open(self._save_path +
-                                                 '/' +
-                                                 'loss_validation_%s.txt' % dataset_name,
-                                                 'a')
-                        new_files['perplexity'] = open(self._save_path +
-                                                       '/' +
-                                                       'perplexity_validation_%s.txt' % dataset_name,
-                                                       'a')
-                        new_files['accuracy'] = open(self._save_path +
-                                                     '/' +
-                                                     'accuracy_validation_%s.txt' % dataset_name,
-                                                     'a')
+                        new_files['loss'] = (self._save_path + '/' + 'loss_validation_%s.txt' % dataset_name)
+                        new_files['perplexity'] = (self._save_path + '/' +
+                                                   'perplexity_validation_%s.txt' % dataset_name)
+                        new_files['accuracy'] = (self._save_path + '/' + 'accuracy_validation_%s.txt' % dataset_name)
                         if self._bpc:
-                            new_files['bpc'] = open(self._save_path +
-                                                    '/' +
-                                                    'bpc_validation_%s.txt' % dataset_name,
-                                                    'a')
-                        new_files['pickle_tensors'] = open(self._save_path +
-                                                           '/' +
-                                                           'tensors_validation_%s.pickle' % dataset_name,
-                                                           'ab')
+                            new_files['bpc'] = (self._save_path + '/' + 'bpc_validation_%s.txt' % dataset_name)
+                        new_files['pickle_tensors'] = (self._save_path + '/' +
+                                                       'tensors_validation_%s.pickle' % dataset_name)
 
                     self._dataset_specific[dataset_name] = {'name': dataset_name,
                                                             'files': new_files}
@@ -212,11 +184,6 @@ class Handler(object):
                             init_dict[key] = list()
                     #print('dataset_name:', dataset_name)
                     self._environment_instance.init_storage(dataset_name, **init_dict)
-            for key in self._dataset_specific.keys():
-                if key not in validation_dataset_names:
-                    for file_d in self._dataset_specific[key]['files'].values():
-                        file_d.close()
-                    del self._dataset_specific[key]
 
     def set_new_run_schedule(self, schedule, train_dataset_name, validation_dataset_names):
         self._results_collect_interval = schedule['to_be_collected_while_training']['results_collect_interval']
@@ -238,6 +205,10 @@ class Handler(object):
             self._print_fuses = False
         self._train_tensor_schedule = schedule['train_tensor_schedule']
         self._validation_tensor_schedule = schedule['validation_tensor_schedule']
+        for tensor_use, tensor_instructions in self._validation_tensor_schedule.items():
+            self._accumulated_tensors[tensor_use] = dict()
+            for tensor_alias, step_schedule in tensor_instructions.items():
+                self._accumulated_tensors[tensor_use][tensor_alias] = {'values': list(), 'steps': step_schedule}
         self._printed_controllers = schedule['printed_controllers']
         self._printed_result_types = schedule['printed_result_types']
 
@@ -300,11 +271,12 @@ class Handler(object):
                 mean = mean / counter
             if self._save_path is not None:
                 if save_to_file:
-                    file_d = self._dataset_specific[self._name_of_dataset_on_which_accumulating]['files'][key]
-                    if self._training_step is not None:
-                        file_d.write('%s %s\n' % (self._training_step, mean))
-                    else:
-                        file_d.write('%s\n' % (sum(value_list) / len(value_list)))
+                    file_name = self._dataset_specific[self._name_of_dataset_on_which_accumulating]['files'][key]
+                    with open(file_name, 'a') as f:
+                        if self._training_step is not None:
+                            f.write('%s %s\n' % (self._training_step, mean))
+                        else:
+                            f.write('%s\n' % (sum(value_list) / len(value_list)))
             means[key] = mean
         if save_to_storage:
             self._environment_instance.append_to_storage(self._name_of_dataset_on_which_accumulating,
@@ -314,6 +286,10 @@ class Handler(object):
                 regime='validation',
                 message='results on validation dataset %s' % self._name_of_dataset_on_which_accumulating,
                 **means)
+        if 'valid_print_tensors' in self._accumulated_tensors:
+            valid_print_tensors = self._accumulated_tensors['valid_print_tensors']
+            if len(valid_print_tensors) > 0:
+                self._print_validation_tensors(valid_print_tensors)
         self._training_step = None
         self._name_of_dataset_on_which_accumulating = None
         self._save_accumulated_tensors()
@@ -362,8 +338,8 @@ class Handler(object):
         print(self._form_fuse_msg(training_step))
 
     def _save_fuse_results(self, training_step):
-        with open(self._fuse_file_name, 'a', encoding='utf-8') as fd:
-            fd.write(self._form_fuse_msg(training_step) + '\n'*2)
+        with open(self._fuse_file_name, 'a', encoding='utf-8') as f:
+            f.write(self._form_fuse_msg(training_step) + '\n'*2)
 
     def clean_fuse_results(self):
         for fuse in self._fuses:
@@ -379,19 +355,45 @@ class Handler(object):
             fuse['results'] = list()
         return res
 
+    @staticmethod
+    def _print_1_validation_hook_result(hook_res):
+        if isinstance(hook_res, list):
+            for high_idx, high_elem in enumerate(hook_res):
+                if isinstance(high_elem, list):
+                    for low_idx, low_elem in enumerate(high_elem):
+                        print('\n'*4 + '[%s][%s]:' % (high_idx, low_idx), low_elem)
+                else:
+                    print('\n'*2 + '[%s]:' % high_idx, high_elem)
+        else:
+            print(hook_res)
+
+    def _print_validation_tensors(self, valid_print_tensors):
+        print('validation tensors:')
+        for tensor_alias, res in valid_print_tensors.items():
+            print(tensor_alias + ':')
+            if isinstance(res['steps'], int):
+                steps = [res['steps'] * i for i in range(len(res['values']))]
+            if isinstance(res['steps'], list):
+                steps = res['steps']
+            for step, value in zip(steps, res['values']):
+                print('%s:' % step)
+                self._print_1_validation_hook_result(value)
+            print('')
+
     def _process_validation_results(self,
                                     step,
                                     validation_res):
+        # print("self._last_run_tensor_order['basic']['borders']:", self._last_run_tensor_order['basic']['borders'])
+        tmp_output = validation_res[self._last_run_tensor_order['basic']['borders'][0] + 1: \
+            self._last_run_tensor_order['basic']['borders'][1]]
+        # print('tmp_output:', tmp_output)
         if self._bpc:
-            [loss, perplexity, accuracy, bpc] = validation_res[1:5]
-        else:
-            [loss, perplexity, accuracy] = validation_res[1:4]
-        if self._bpc:
+            [loss, perplexity, accuracy, bpc] = tmp_output
             self._accumulate_several_data(['loss', 'perplexity', 'accuracy', 'bpc'], [loss, perplexity, accuracy, bpc])
-            self._accumulate_tensors(step, validation_res[5:])
         else:
+            [loss, perplexity, accuracy] = tmp_output
             self._accumulate_several_data(['loss', 'perplexity', 'accuracy'], [loss, perplexity, accuracy])
-            self._accumulate_tensors(step, validation_res[4:])
+        self._accumulate_tensors(step, validation_res)
 
     def _cope_with_tensor_alias(self,
                                 alias):
@@ -414,9 +416,15 @@ class Handler(object):
 
     def _save_datum(self, descriptor, step, datum, processing_type, dataset_name):
         if processing_type == 'train':
-            self._train_files[descriptor].write('%s %s\n' % (step, datum))
+            file_name = self._train_files[descriptor]
+            # print('file_name:', file_name)
+            # print('self._train_files:', self._train_files)
+            with open(file_name, 'a') as f:
+                f.write('%s %s\n' % (step, datum))
         elif processing_type == 'validation':
-            self._dataset_specific[dataset_name]['files'][descriptor].write('%s %s\n' % (step, datum))
+            file_name = self._dataset_specific[dataset_name]['files'][descriptor]
+            with open(file_name, 'a') as f:
+                f.write('%s %s\n' % (step, datum))
 
     def _save_launch_results(self, results, hp):
         for dataset_name, res in results.items():
@@ -427,8 +435,8 @@ class Handler(object):
             all_together.update(res)
             for key in self._order:
                 values.append(all_together[key])
-            with open(self._file_names[dataset_name], 'a') as fd:
-                fd.write(self._tmpl % tuple(values))
+            with open(self._file_names[dataset_name], 'a') as f:
+                f.write(self._tmpl % tuple(values))
 
     def _save_several_data(self,
                            descriptors,
@@ -495,8 +503,7 @@ class Handler(object):
             if self._fuse_tensor_schedule is not None:
                 additional_tensors = self._get_additional_tensors(self._fuse_tensor_schedule, step, pointer)
                 tensors.extend(additional_tensors)
-
-        #print(tensors)
+        # print(tensors)
         return tensors
 
     def _get_additional_tensors(self,
@@ -578,7 +585,13 @@ class Handler(object):
                     print('%s: %s' % (key, res[key]))
 
     def _accumulate_tensors(self, step, tensors):
-        pass
+        tensor_order = construct(self._last_run_tensor_order)
+        del tensor_order['basic']
+        for tensor_use, instructions_1_use in tensor_order.items():
+            current = self._accumulated_tensors[tensor_use]
+            extracted = self._extract_results(tensor_order, tensor_use, tensors)
+            for tensor_alias, value in extracted.items():
+                current[tensor_alias]['values'].append(value)
 
     def _save_tensors(self, tensors):
         pass
@@ -636,20 +649,20 @@ class Handler(object):
                     output.append(len(l))
                 return output
 
-    def _extract_results(self, last_order, tensor_use, train_res):
+    def _extract_results(self, last_order, tensor_use, res):
         extracted = dict()
         for alias, borders in last_order[tensor_use]['tensors'].items():
             structure = self._get_structure_of_hook(alias)
             if isinstance(structure, int):
-                extracted[alias] = train_res[borders[0]]
+                extracted[alias] = res[borders[0]]
             elif isinstance(structure, list):
                 if len(structure) == 1:
-                    extracted[alias] = train_res[borders[0], borders[1]]
+                    extracted[alias] = res[borders[0], borders[1]]
                 else:
                     structured = list()
                     pointer = borders[0]
                     for length in structure[1:]:
-                        structured.append(train_res[pointer, pointer+length])
+                        structured.append(res[pointer, pointer+length])
                     extracted[alias] = structured
         return extracted
 
@@ -818,10 +831,4 @@ class Handler(object):
                 f.write('\nfinish time: ' + str(now) + '\n')
 
     def close(self):
-        if self._processing_type == 'train':
-            for file in self._train_files.values():
-                file.close()
-        if self._processing_type == 'test' or self._processing_type == 'train':
-            for dataset in self._dataset_specific.values():
-                for file_d in dataset['files'].values():
-                    file_d.close()
+        pass

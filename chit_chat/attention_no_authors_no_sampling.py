@@ -201,12 +201,12 @@ class Lstm(Model):
     def _create_connection_vectors(self, hidden_states, saved_for_connections, idx):
         with tf.name_scope('attention_%s' % idx):
             hidden_states = tf.concat(hidden_states, 1)
-            print('\n_create_connection_vectors')
-            print('saved_for_connections:', saved_for_connections)
-            print('hidden_states.shape:', hidden_states.get_shape().as_list())
+            # print('\n_create_connection_vectors')
+            # print('saved_for_connections:', saved_for_connections)
+            # print('hidden_states.shape:', hidden_states.get_shape().as_list())
 
             for_computing = tf.stack(saved_for_connections[-self._connection_visibility:])
-            print('for_computing.shape:', for_computing.get_shape().as_list())
+            # print('for_computing.shape:', for_computing.get_shape().as_list())
             scalar_products = tf.einsum('ijk,jk->ji', for_computing, hidden_states)
             scores = tf.nn.softmax(scalar_products, name='scores')
             from_attention = tf.einsum('ijk,ji->jk', for_computing, scores)
@@ -260,7 +260,9 @@ class Lstm(Model):
             for variable in flattened:
                 shape = variable.get_shape().as_list()
                 name = self._extract_op_name(variable.name)
-                reset_list.append(tf.assign(variable, tf.zeros(shape), name='assign_reset_%s' % name))
+                reset_list.append(
+                    tf.assign(variable, tf.zeros(shape=shape, dtype=variable.dtype),
+                              name='assign_reset_%s' % name))
             return reset_list
 
     def _compose_randomize_list(self, *args):
@@ -305,15 +307,148 @@ class Lstm(Model):
                 loss += regularizer(matr)
             return loss * self._regularization_rate
 
-    def _unpack_sample_for_connections(self, for_connections):
-        with tf.name_scope('unpacking_for_connections'):
-            final = tf.unstack(for_connections)
-            return final
+    def _train_graph(self):
+        with tf.name_scope('train'):
+            saved_states = list()
+            for layer_idx, layer_num_nodes in enumerate(self._num_nodes):
+                saved_states.append(
+                    (tf.Variable(
+                         tf.zeros([self._batch_size, layer_num_nodes]),
+                         trainable=False,
+                         name='saved_state_%s_%s' % (layer_idx, 0)),
+                     tf.Variable(
+                         tf.zeros([self._batch_size, layer_num_nodes]),
+                         trainable=False,
+                         name='saved_state_%s_%s' % (layer_idx, 1)))
+                )
+            saved_for_connections = list()
+            for idx in range(self._connection_visibility):
+                saved_for_connections.append(tf.Variable(tf.zeros([self._batch_size, sum(self._num_nodes)]),
+                                                         trainable=False,
+                                                         name='saved_attention_%s' % idx))
 
-    @staticmethod
-    def _pack_sample_for_connections(for_connections):
-        with tf.name_scope('packing_for_connections'):
-            return tf.stack(for_connections)
+            self.inputs = tf.placeholder(tf.float32,
+                                         shape=[self._num_unrollings, self._batch_size, self._vocabulary_size])
+            self.labels = tf.placeholder(tf.float32,
+                                         shape=[self._num_unrollings * self._batch_size, self._vocabulary_size])
+            self._hooks['inputs'] = self.inputs
+            self._hooks['labels'] = self.labels
+
+            inputs = tf.unstack(self.inputs)
+
+            states = saved_states
+            for_connections = list(saved_for_connections)
+            embeddings = self._embed(inputs)
+            all_hidden_states = list()
+            for iter_idx, emb in enumerate(embeddings):
+                with tf.name_scope('iteration_%s' % iter_idx):
+                    if iter_idx % self._connection_interval == 0:
+                        connection_vectors = self._create_connection_vectors([state[0] for state in states],
+                                                                             for_connections,
+                                                                             iter_idx)
+                    hidden_states, states = self._rnn_iter(emb, connection_vectors, states)
+                    all_hidden_states.append(hidden_states)
+                    if iter_idx % self._connection_interval == 0:
+                        for_connections.append(tf.concat(hidden_states, 1, name='for_connections'))
+
+            logits = self._output_module(all_hidden_states)
+
+            save_ops = self._compose_save_list([saved_states, states])
+            save_ops.extend(self._compose_save_list_secure([saved_for_connections,
+                                                            for_connections[-self._connection_visibility:]]))
+            with tf.control_dependencies(save_ops):
+                all_matrices = [self._embedding_matrix]
+                all_matrices.extend(self._lstm_matrices)
+                all_matrices.extend(self._output_matrices)
+                all_matrices.append(self._output_gates_matrix)
+                l2_loss = self._l2_loss(all_matrices)
+                self.loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=self.labels, logits=logits))
+                self.learning_rate = tf.placeholder(tf.float32, name='learning_rate')
+                self._hooks['loss'] = self.loss
+                self._hooks['learning_rate'] = self.learning_rate
+                #optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
+                optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
+                gradients, v = zip(*optimizer.compute_gradients(self.loss + l2_loss))
+                gradients, _ = tf.clip_by_global_norm(gradients, 1.)
+                self.train_op = optimizer.apply_gradients(zip(gradients, v))
+                self.predictions = tf.nn.softmax(logits)
+                self._hooks['train_op'] = self.train_op
+                self._hooks['predictions'] = self.predictions
+
+    def _validation_graph(self):
+        with tf.name_scope('validation'):
+            saved_sample_counter = tf.Variable(0, trainable=False, name='valid_counter')
+            self.sample_input = tf.placeholder(tf.float32, shape=[1, 1, self._vocabulary_size])
+            self._hooks['validation_inputs'] = self.sample_input
+            sample_input = tf.reshape(self.sample_input, [1, -1])
+            saved_sample_state = list()
+            for layer_idx, layer_num_nodes in enumerate(self._num_nodes):
+                saved_sample_state.append(
+                    (tf.Variable(
+                        tf.zeros([1, layer_num_nodes]),
+                        trainable=False,
+                        name='saved_sample_state_%s_%s' % (layer_idx, 0)),
+                     tf.Variable(
+                         tf.zeros([1, layer_num_nodes]),
+                         trainable=False,
+                         name='saved_sample_state_%s_%s' % (layer_idx, 1)))
+                )
+            saved_sample_for_connections = tf.Variable(tf.zeros([self._connection_visibility, 1, sum(self._num_nodes)]),
+                                                       trainable=False,
+                                                       name='saved_sample_state')
+            sample_for_connections = tf.unstack(saved_sample_for_connections)
+            # print('\nsample_for_connections:', sample_for_connections)
+
+            saved_sample_from_connections = list()
+            for layer_idx in range(self._num_layers):
+                saved_sample_from_connections.append(tf.Variable(tf.zeros([1, self._num_nodes[layer_idx]]),
+                                                                 trainable=False,
+                                                                 name='saved_sample_from_connections_%s' % layer_idx))
+
+            reset_list = self._compose_reset_list(saved_sample_state,
+                                                  saved_sample_for_connections,
+                                                  saved_sample_from_connections)
+            self.reset_sample_state = tf.group(*reset_list)
+            self._hooks['reset_validation_state'] = self.reset_sample_state
+
+            randomize_list = self._compose_randomize_list(saved_sample_state,
+                                                          saved_sample_for_connections,
+                                                          saved_sample_from_connections)
+            self.randomize = tf.group(*randomize_list)
+            self._hooks['randomize_sample_state'] = self.randomize
+
+            it_is_time_to_reset_from_connections = tf.equal(tf.mod(saved_sample_counter, self._connection_interval), 0)
+            sample_hidden_states = [layer_state[0] for layer_state in saved_sample_state]
+            sample_from_connections = tf.cond(
+                it_is_time_to_reset_from_connections,
+                true_fn=lambda: self._create_connection_vectors(sample_hidden_states,
+                                                                sample_for_connections,
+                                                                0),
+                false_fn=lambda: saved_sample_from_connections)
+
+            embeddings = self._embed([sample_input])
+            sample_hidden_states, sample_state = self._rnn_iter(embeddings[0],
+                                                                sample_from_connections,
+                                                                saved_sample_state)
+            sample_logits = self._output_module([sample_hidden_states])
+
+            sample_for_connections.append(tf.concat(sample_hidden_states, 1))
+            sample_for_connections = tf.stack(sample_for_connections)
+            sample_for_connections = tf.cond(
+                it_is_time_to_reset_from_connections,
+                true_fn=lambda: tf.split(sample_for_connections, [1, self._connection_visibility], axis=0)[1],
+                false_fn=lambda: tf.split(sample_for_connections, [self._connection_visibility, 1], axis=0)[0]
+            )
+
+            sample_counter = saved_sample_counter + 1
+            sample_save_ops = self._compose_save_list([saved_sample_state, sample_state],
+                                                      [saved_sample_for_connections, sample_for_connections],
+                                                      [saved_sample_counter, sample_counter],
+                                                      [saved_sample_from_connections, sample_from_connections])
+
+            with tf.control_dependencies(sample_save_ops):
+                self.sample_prediction = tf.nn.softmax(sample_logits)
+                self._hooks['validation_predictions'] = self.sample_prediction
 
     def __init__(self,
                  batch_size=64,
@@ -327,7 +462,22 @@ class Lstm(Model):
                  connection_visibility=3,
                  subsequence_length_in_intervals=7,
                  init_parameter=3.,
-                 regularization_rate=.000003):
+                 regularization_rate=.000003,
+                 regime='train'):
+
+        self._hooks = dict(inputs=None,
+                           labels=None,
+                           train_op=None,
+                           learning_rate=None,
+                           loss=None,
+                           predictions=None,
+                           validation_inputs=None,
+                           validation_predictions=None,
+                           reset_validation_state=None,
+                           randomize_sample_state=None,
+                           dropout=None,
+                           saver=None)
+
         self._batch_size = batch_size
         self._num_layers = num_layers
         self._num_nodes = num_nodes
@@ -343,6 +493,7 @@ class Lstm(Model):
         self._regularization_rate = regularization_rate
 
         self.dropout_keep_prob = tf.placeholder(tf.float32, name='dropout_keep_prob')
+        self._hooks['dropout'] = self.dropout_keep_prob
         self._embedding_matrix = tf.Variable(
             tf.truncated_normal([self._vocabulary_size, self._embedding_size],
                                 stddev=self._init_parameter*np.sqrt(1./self._vocabulary_size)),
@@ -376,135 +527,6 @@ class Lstm(Model):
                                                      name='output_matrix_%s' % layer_idx))
             self._output_biases.append(tf.Variable(tf.zeros([output_dim])))
 
-        with tf.name_scope('train'):
-            saved_states = list()
-            for layer_idx, layer_num_nodes in enumerate(self._num_nodes):
-                saved_states.append(
-                    (tf.Variable(
-                         tf.zeros([self._batch_size, layer_num_nodes]),
-                         trainable=False,
-                         name='saved_state_%s_%s' % (layer_idx, 0)),
-                     tf.Variable(
-                         tf.zeros([self._batch_size, layer_num_nodes]),
-                         trainable=False,
-                         name='saved_state_%s_%s' % (layer_idx, 1)))
-                )
-            saved_for_connections = list()
-            for idx in range(self._connection_visibility):
-                saved_for_connections.append(tf.Variable(tf.zeros([self._batch_size, sum(self._num_nodes)]),
-                                                         trainable=False,
-                                                         name='saved_attention_%s' % idx))
-
-            self.inputs = tf.placeholder(tf.float32,
-                                         shape=[self._num_unrollings, self._batch_size, self._vocabulary_size])
-            self.labels = tf.placeholder(tf.float32,
-                                         shape=[self._num_unrollings * self._batch_size, self._vocabulary_size])
-
-            inputs = tf.unstack(self.inputs)
-
-            states = saved_states
-            for_connections = list(saved_for_connections)
-            embeddings = self._embed(inputs)
-            all_hidden_states = list()
-            for iter_idx, emb in enumerate(embeddings):
-                with tf.name_scope('iteration_%s' % iter_idx):
-                    if iter_idx % self._connection_interval == 0:
-                        connection_vectors = self._create_connection_vectors([state[0] for state in states],
-                                                                             for_connections,
-                                                                             iter_idx)
-                    hidden_states, states = self._rnn_iter(emb, connection_vectors, states)
-                    all_hidden_states.append(hidden_states)
-                    if iter_idx % self._connection_interval == 0:
-                        for_connections.append(tf.concat(hidden_states, 1, name='for_connections'))
-
-            logits = self._output_module(all_hidden_states)
-
-            save_ops = self._compose_save_list([saved_states, states])
-            save_ops.extend(self._compose_save_list_secure([saved_for_connections,
-                                                            for_connections[-self._connection_visibility:]]))
-            with tf.control_dependencies(save_ops):
-                all_matrices = [self._embedding_matrix]
-                all_matrices.extend(self._lstm_matrices)
-                all_matrices.extend(self._output_matrices)
-                all_matrices.append(self._output_gates_matrix)
-                l2_loss = self._l2_loss(all_matrices)
-                self.loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=self.labels, logits=logits))
-                self.learning_rate = tf.placeholder(tf.float32, name='learning_rate')
-                #optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
-                optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
-                gradients, v = zip(*optimizer.compute_gradients(self.loss + l2_loss))
-                gradients, _ = tf.clip_by_global_norm(gradients, 1.)
-                self.train_op = optimizer.apply_gradients(zip(gradients, v))
-                self.predictions = tf.nn.softmax(logits)
-        with tf.name_scope('validation'):
-            saved_sample_counter = tf.Variable(0, trainable=False, name='valid_counter')
-            self.sample_input = tf.placeholder(tf.float32, shape=[1, 1, self._vocabulary_size])
-            sample_input = tf.reshape(self.sample_input, [1, -1])
-            saved_sample_state = list()
-            for layer_idx, layer_num_nodes in enumerate(self._num_nodes):
-                saved_sample_state.append(
-                    (tf.Variable(
-                        tf.zeros([1, layer_num_nodes]),
-                        trainable=False,
-                        name='saved_sample_state_%s_%s' % (layer_idx, 0)),
-                     tf.Variable(
-                         tf.zeros([1, layer_num_nodes]),
-                         trainable=False,
-                         name='saved_sample_state_%s_%s' % (layer_idx, 1)))
-                )
-            saved_sample_for_connections = tf.Variable(tf.zeros([self._connection_visibility, 1, sum(self._num_nodes)]),
-                                                       trainable=False,
-                                                       name='saved_sample_state')
-            sample_for_connections = self._unpack_sample_for_connections(saved_sample_for_connections)
-            print('\nsample_for_connections:', sample_for_connections)
-
-            saved_sample_from_connections = list()
-            for layer_idx in range(self._num_layers):
-                saved_sample_from_connections.append(tf.Variable(tf.zeros([1, self._num_nodes[layer_idx]]),
-                                                                 trainable=False,
-                                                                 name='saved_sample_from_connections_%s' % layer_idx))
-
-            reset_list = self._compose_reset_list(saved_sample_state,
-                                                  saved_sample_for_connections,
-                                                  saved_sample_from_connections)
-            self.reset_sample_state = tf.group(*reset_list)
-
-            randomize_list = self._compose_randomize_list(saved_sample_state,
-                                                          saved_sample_for_connections,
-                                                          saved_sample_from_connections)
-            self.randomize = tf.group(*randomize_list)
-
-            it_is_time_to_reset_from_connections = tf.equal(tf.mod(saved_sample_counter, self._connection_interval), 0)
-            sample_hidden_states = [layer_state[0] for layer_state in saved_sample_state]
-            sample_from_connections = tf.cond(
-                it_is_time_to_reset_from_connections,
-                true_fn=lambda: self._create_connection_vectors(sample_hidden_states,
-                                                                sample_for_connections,
-                                                                0),
-                false_fn=lambda: saved_sample_from_connections)
-
-            embeddings = self._embed([sample_input])
-            sample_hidden_states, sample_state = self._rnn_iter(embeddings[0],
-                                                                sample_from_connections,
-                                                                saved_sample_state)
-            sample_logits = self._output_module([sample_hidden_states])
-
-            sample_for_connections.append(tf.concat(sample_hidden_states, 1))
-            sample_for_connections = self._pack_sample_for_connections(sample_for_connections)
-            sample_for_connections = tf.cond(
-                it_is_time_to_reset_from_connections,
-                true_fn=lambda: tf.split(sample_for_connections, [1, self._connection_visibility], axis=0)[1],
-                false_fn=lambda: tf.split(sample_for_connections, [self._connection_visibility, 1], axis=0)[0]
-            )
-
-            sample_counter = saved_sample_counter + 1
-            sample_save_ops = self._compose_save_list([saved_sample_state, sample_state],
-                                                      [saved_sample_for_connections, sample_for_connections],
-                                                      [saved_sample_counter, sample_counter],
-                                                      [saved_sample_from_connections, sample_from_connections])
-
-            with tf.control_dependencies(sample_save_ops):
-                self.sample_prediction = tf.nn.softmax(sample_logits)
         saved_vars = dict()
         saved_vars['embedding_matrix'] = self._embedding_matrix
         for layer_idx, (lstm_matrix, lstm_bias) in enumerate(zip(self._lstm_matrices, self._lstm_biases)):
@@ -515,22 +537,16 @@ class Lstm(Model):
             saved_vars['output_matrix_%s' % layer_idx] = output_matrix
             saved_vars['output_bias_%s' % layer_idx] = output_bias
         self.saver = tf.train.Saver(saved_vars, max_to_keep=None)
+        self._hooks['saver'] = self.saver
+
+        if regime == 'train':
+            self._train_graph()
+            self._validation_graph()
+        if regime == 'inference':
+            self._validation_graph()
 
     def get_default_hooks(self):
-        hooks = dict()
-        hooks['inputs'] = self.inputs
-        hooks['labels'] = self.labels
-        hooks['train_op'] = self.train_op
-        hooks['learning_rate'] = self.learning_rate
-        hooks['loss'] = self.loss
-        hooks['predictions'] = self.predictions
-        hooks['validation_inputs'] = self.sample_input
-        hooks['validation_predictions'] = self.sample_prediction
-        hooks['reset_validation_state'] = self.reset_sample_state
-        hooks['randomize_sample_state'] = self.randomize
-        hooks['dropout'] = self.dropout_keep_prob
-        hooks['saver'] = self.saver
-        return hooks
+        return dict(self._hooks.items())
 
     def get_building_parameters(self):
         pass

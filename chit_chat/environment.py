@@ -513,8 +513,9 @@ class Environment(object):
             self._add_hook(builder_name, model_type=model_type)
         for builder_name in not_loss_builder_names:
             self._add_hook(builder_name, model_type=model_type)
-        for alias, name in tensor_names:
-            self._hooks[alias] = tf.get_default_graph().get_tensor_by_name(name)
+        if model_type == 'pupil':
+            for alias, name in tensor_names:
+                self._pupil_hooks[alias] = tf.get_default_graph().get_tensor_by_name(name)
 
     def register_build_function(self, function, name):
         self._build_functions[name] = function
@@ -626,9 +627,10 @@ class Environment(object):
 
     def _initialize_pupil(self, restore_path):
         if restore_path is not None:
+            print('restoring from %s' % restore_path)
+        self._session.run(tf.global_variables_initializer())
+        if restore_path is not None:
             self._pupil_hooks['saver'].restore(self._session, restore_path)
-        else:
-            self._session.run(tf.global_variables_initializer())
 
     def test(self,
              **kwargs):
@@ -1379,10 +1381,21 @@ class Environment(object):
                   vocabulary,
                   characters_positions_in_vocabulary,
                   batch_generator_class,
+                  additions_to_feed_dict=None,
                   gpu_memory=None,
+                  allow_soft_placement=False,
+                  log_device_placement=False,
+                  visible_device_list='',
                   appending=True,
                   temperature=0.,
                   first_speaker='human'):
+        if additions_to_feed_dict is None:
+            feed_dict_base = dict()
+        else:
+            feed_dict_base = dict()
+            for addition in additions_to_feed_dict:
+                feed_dict_base[self._pupil_hooks[addition['placeholder']]] = addition['value']
+
         create_path(log_path, file_name_is_in_path=True)
         if not appending:
             log_path = add_index_to_filename_if_needed(log_path)
@@ -1394,59 +1407,69 @@ class Environment(object):
                                 log_device_placement=False)
         if gpu_memory is not None:
             config.gpu_options.per_process_gpu_memory_fraction = gpu_memory
-
-        with tf.Session(config=config) as session:
-            if restore_path is None:
-                print_and_log('Skipping variables restoring. Continueing on current variables values', fd=fd)
-            else:
-                print('restoring from %s' % restore_path)
-                self._pupil_hooks['saver'].restore(session, restore_path)
-            self._pupil_hooks['reset_validation_state'].run()
-            if first_speaker == 'human':
-                human_replica = input('Human: ')
-            else:
-                human_replica = ''
-            sample_prediction = self._pupil_hooks['validation_predictions']
-            sample_input = self._pupil_hooks['validation_inputs']
-            while not human_replica == 'FINISH':
-                if human_replica != '':
-                    print_and_log('Human: ' + human_replica, _print=False, fd=fd)
-                    for char in human_replica:
-                        feed = batch_generator_class.char2vec(char, characters_positions_in_vocabulary)
-                        # print('feed.shape:', feed.shape)
-                        _ = sample_prediction.eval({sample_input: feed})
-                feed = batch_generator_class.char2vec('\n', characters_positions_in_vocabulary)
-                prediction = sample_prediction.eval({sample_input: feed})
+        self._start_session(allow_soft_placement,
+                            log_device_placement,
+                            gpu_memory,
+                            visible_device_list)
+        if restore_path is None:
+            print_and_log('Skipping variables restoring. Continuing on current variables values', fd=fd)
+        else:
+            self._initialize_pupil(restore_path)
+        self._pupil_hooks['reset_validation_state'].run(session=self._session)
+        if first_speaker == 'human':
+            human_replica = input('Human: ')
+        else:
+            human_replica = ''
+        sample_prediction = self._pupil_hooks['validation_predictions']
+        sample_input = self._pupil_hooks['validation_inputs']
+        while not human_replica == 'FINISH':
+            if human_replica != '':
+                print_and_log('Human: ' + human_replica, _print=False, fd=fd)
+                for char in human_replica:
+                    feed = batch_generator_class.char2vec(char, characters_positions_in_vocabulary)
+                    # print('feed.shape:', feed.shape)
+                    feed_dict = dict(feed_dict_base.items())
+                    feed_dict[sample_input] = feed
+                    _ = sample_prediction.eval(feed_dict=feed_dict, session=self._session)
+            feed = batch_generator_class.char2vec('\n', characters_positions_in_vocabulary)
+            feed_dict = dict(feed_dict_base.items())
+            feed_dict[sample_input] = feed
+            prediction = sample_prediction.eval(feed_dict=feed_dict, session=self._session)
+            if temperature != 0.:
+                prediction = apply_temperature(prediction, -1, temperature)
+                prediction = sample(prediction, -1)
+            counter = 0
+            char = None
+            bot_replica = ""
+            # print('ord(\'\\n\'):', ord('\n'))
+            while char != '\n' and counter < 500:
+                feed = batch_generator_class.pred2vec(prediction)
+                # print('prediction after sampling:', prediction)
+                # print('feed:', feed)
+                feed_dict = dict(feed_dict_base.items())
+                feed_dict[sample_input] = feed
+                prediction = sample_prediction.eval(feed_dict=feed_dict, session=self._session)
+                # print('prediction before sampling:', prediction)
                 if temperature != 0.:
                     prediction = apply_temperature(prediction, -1, temperature)
+                    # print('prediction after temperature:', prediction)
                     prediction = sample(prediction, -1)
-                counter = 0
-                char = None
-                bot_replica = ""
-                # print('ord(\'\\n\'):', ord('\n'))
-                while char != '\n' and counter < 500:
-                    feed = batch_generator_class.pred2vec(prediction)
-                    # print('prediction after sampling:', prediction)
-                    # print('feed:', feed)
-                    prediction = sample_prediction.eval({sample_input: feed})
-                    # print('prediction before sampling:', prediction)
-                    if temperature != 0.:
-                        prediction = apply_temperature(prediction, -1, temperature)
-                        # print('prediction after temperature:', prediction)
-                        prediction = sample(prediction, -1)
-                    char = batch_generator_class.vec2char(np.reshape(feed, (1, -1)), vocabulary)[0]
-                    if char != '\n':
-                        # print('char != \'\\n\', counter = %s' % counter)
-                        # print('ord(char):', ord(char))
-                        bot_replica += char
-                    counter += 1
-                print_and_log('Bot: ' + bot_replica, fd=fd)
-                feed = batch_generator_class.char2vec('\n', characters_positions_in_vocabulary)
-                _ = sample_prediction.eval({sample_input: feed})
+                char = batch_generator_class.vec2char(np.reshape(feed, (1, -1)), vocabulary)[0]
+                if char != '\n':
+                    # print('char != \'\\n\', counter = %s' % counter)
+                    # print('ord(char):', ord(char))
+                    bot_replica += char
+                counter += 1
+            print_and_log('Bot: ' + bot_replica, fd=fd)
+            feed = batch_generator_class.char2vec('\n', characters_positions_in_vocabulary)
+            feed_dict = dict(feed_dict_base.items())
+            feed_dict[sample_input] = feed
+            _ = sample_prediction.eval(feed_dict=feed_dict, session=self._session)
 
-                human_replica = input('Human: ')
-            fd.write('\n*********************')
-            fd.close()
+            human_replica = input('Human: ')
+        fd.write('\n*********************')
+        fd.close()
+        self._close_session()
 
     def generate_discriminator_dataset(self,
                                        num_examples,

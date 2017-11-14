@@ -8,11 +8,11 @@ text = f.read()
 f.close()
 
 # different
-offset = 10000
-valid_size = 10000
-valid_text = text[offset:offset + valid_size]
-train_text = text[offset + valid_size:]
-train_size = len(train_text)
+lines = text.splitlines(True)
+num_lines = len(lines)
+used_lines = lines[:int(.95*num_lines)]
+valid_text = ''.join(used_lines[:100])
+train_text = ''.join(used_lines[100:])
 
 # In[5]:
 
@@ -24,21 +24,21 @@ cpiv = get_positions_in_vocabulary(vocabulary)
 
 env.build(batch_size=64,
           num_layers=2,
-          num_nodes=[48, 48],
+          num_nodes=[1048, 1048],
           vocabulary_size=vocabulary_size,
           embedding_size=128,
           num_unrollings=50,
-          init_parameter=4.)
+          init_parameter=3.)
 
 env.train(save_path='debugging_environment/first',
           learning_rate={'type': 'exponential_decay',
-                         'init': .005,
-                         'decay': .9,
-                         'period': 500},
+                         'init': .002,
+                         'decay': .5,
+                         'period': 15000},
           batch_size=64,
-          num_unrollings=50,
+          num_unrollings=100,
           vocabulary=vocabulary,
-          checkpoint_steps=20000,
+          checkpoint_steps=10000,
           result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
           printed_result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
           stop=100000,
@@ -47,5 +47,5 @@ env.train(save_path='debugging_environment/first',
           train_dataset_text=train_text,
           validation_dataset_texts=[valid_text],
           #validation_dataset=[valid_text],
-          results_collect_interval=400,
+          results_collect_interval=1000,
           visible_device_list="3")
