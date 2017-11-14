@@ -27,7 +27,7 @@ subsequence_length_in_intervals = 10
 
 env.build(batch_size=64,
           num_layers=2,
-          num_nodes=[1200, 1200],
+          num_nodes=[120, 120],
           num_output_layers=2,
           num_output_nodes=[1024],
           vocabulary_size=vocabulary_size,
@@ -35,7 +35,6 @@ env.build(batch_size=64,
           connection_interval=connection_interval,
           subsequence_length_in_intervals=subsequence_length_in_intervals,
           connection_visibility=connection_visibility,
-          num_unrollings=subsequence_length_in_intervals*connection_interval,
           init_parameter=3.,
           num_gpus=2)
 
