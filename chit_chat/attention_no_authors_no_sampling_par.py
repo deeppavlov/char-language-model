@@ -3,7 +3,8 @@ import numpy as np
 import tensorflow as tf
 from some_useful_functions import (construct, create_vocabulary,
                                    get_positions_in_vocabulary, char2vec, pred2vec, vec2char,
-                                   char2id, id2char, flatten)
+                                   char2id, id2char, flatten, get_available_gpus, device_name_scope,
+                                   average_gradients, get_num_gpus_and_bs_on_gpus)
 
 
 url = 'http://mattmahoney.net/dc/'
@@ -308,72 +309,96 @@ class Lstm(Model):
             return loss * self._regularization_rate
 
     def _train_graph(self):
-        with tf.name_scope('train'):
-            saved_states = list()
-            for layer_idx, layer_num_nodes in enumerate(self._num_nodes):
-                saved_states.append(
-                    (tf.Variable(
-                         tf.zeros([self._batch_size, layer_num_nodes]),
-                         trainable=False,
-                         name='saved_state_%s_%s' % (layer_idx, 0)),
-                     tf.Variable(
-                         tf.zeros([self._batch_size, layer_num_nodes]),
-                         trainable=False,
-                         name='saved_state_%s_%s' % (layer_idx, 1)))
-                )
-            saved_for_connections = list()
-            for idx in range(self._connection_visibility):
-                saved_for_connections.append(tf.Variable(tf.zeros([self._batch_size, sum(self._num_nodes)]),
-                                                         trainable=False,
-                                                         name='saved_for_connection_%s' % idx))
 
-            self.inputs = tf.placeholder(tf.float32,
-                                         shape=[self._num_unrollings, self._batch_size, self._vocabulary_size])
-            self.labels = tf.placeholder(tf.float32,
-                                         shape=[self._num_unrollings * self._batch_size, self._vocabulary_size])
-            self._hooks['inputs'] = self.inputs
-            self._hooks['labels'] = self.labels
+        tower_grads = list()
+        preds = list()
+        losses = list()
 
-            inputs = tf.unstack(self.inputs)
+        for gpu_batch_size, gpu_name, device_inputs, device_labels in zip(
+                self._batch_sizes_on_gpus, self._gpu_names, self._inputs_by_device, self._labels_by_device):
+            with tf.device(gpu_name):
+                with tf.name_scope(device_name_scope(gpu_name)):
+                    with tf.name_scope('train'):
+                        saved_states = list()
+                        for layer_idx, layer_num_nodes in enumerate(self._num_nodes):
+                            saved_states.append(
+                                (tf.Variable(
+                                     tf.zeros([gpu_batch_size, layer_num_nodes]),
+                                     trainable=False,
+                                     name='saved_state_%s_%s' % (layer_idx, 0)),
+                                 tf.Variable(
+                                     tf.zeros([gpu_batch_size, layer_num_nodes]),
+                                     trainable=False,
+                                     name='saved_state_%s_%s' % (layer_idx, 1)))
+                            )
+                        saved_for_connections = list()
+                        for idx in range(self._connection_visibility):
+                            saved_for_connections.append(tf.Variable(tf.zeros([gpu_batch_size, sum(self._num_nodes)]),
+                                                                     trainable=False,
+                                                                     name='saved_for_connection_%s' % idx))
 
-            states = saved_states
-            for_connections = list(saved_for_connections)
-            embeddings = self._embed(inputs)
-            all_hidden_states = list()
-            for iter_idx, emb in enumerate(embeddings):
-                with tf.name_scope('iteration_%s' % iter_idx):
-                    if iter_idx % self._connection_interval == 0:
-                        connection_vectors = self._create_connection_vectors([state[0] for state in states],
-                                                                             for_connections,
-                                                                             iter_idx)
-                    hidden_states, states = self._rnn_iter(emb, connection_vectors, states)
-                    all_hidden_states.append(hidden_states)
-                    if iter_idx % self._connection_interval == 0:
-                        for_connections.append(tf.concat(hidden_states, 1, name='for_connections'))
+                        inputs = tf.unstack(device_inputs)
 
-            logits = self._output_module(all_hidden_states)
+                        states = saved_states
+                        for_connections = list(saved_for_connections)
+                        embeddings = self._embed(inputs)
+                        all_hidden_states = list()
+                        for iter_idx, emb in enumerate(embeddings):
+                            with tf.name_scope('iteration_%s' % iter_idx):
+                                if iter_idx % self._connection_interval == 0:
+                                    connection_vectors = self._create_connection_vectors([state[0] for state in states],
+                                                                                         for_connections,
+                                                                                         iter_idx)
+                                hidden_states, states = self._rnn_iter(emb, connection_vectors, states)
+                                all_hidden_states.append(hidden_states)
+                                if iter_idx % self._connection_interval == 0:
+                                    for_connections.append(tf.concat(hidden_states, 1, name='for_connections'))
 
-            save_ops = self._compose_save_list([saved_states, states])
-            save_ops.extend(self._compose_save_list_secure([saved_for_connections,
-                                                            for_connections[-self._connection_visibility:]]))
-            with tf.control_dependencies(save_ops):
-                all_matrices = [self._embedding_matrix]
-                all_matrices.extend(self._lstm_matrices)
-                all_matrices.extend(self._output_matrices)
-                all_matrices.append(self._output_gates_matrix)
-                l2_loss = self._l2_loss(all_matrices)
-                self.loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=self.labels, logits=logits))
-                self.learning_rate = tf.placeholder(tf.float32, name='learning_rate')
-                self._hooks['loss'] = self.loss
-                self._hooks['learning_rate'] = self.learning_rate
-                #optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
-                optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
-                gradients, v = zip(*optimizer.compute_gradients(self.loss + l2_loss))
-                gradients, _ = tf.clip_by_global_norm(gradients, 1.)
-                self.train_op = optimizer.apply_gradients(zip(gradients, v))
-                self.predictions = tf.nn.softmax(logits)
+                        logits = self._output_module(all_hidden_states)
+
+                        save_ops = self._compose_save_list([saved_states, states])
+                        save_ops.extend(self._compose_save_list_secure(
+                            [saved_for_connections, for_connections[-self._connection_visibility:]]))
+                        with tf.control_dependencies(save_ops):
+                            all_matrices = [self._embedding_matrix]
+                            all_matrices.extend(self._lstm_matrices)
+                            all_matrices.extend(self._output_matrices)
+                            all_matrices.append(self._output_gates_matrix)
+                            l2_loss = self._l2_loss(all_matrices)
+                            loss = tf.reduce_mean(
+                                tf.nn.softmax_cross_entropy_with_logits(labels=self.labels, logits=logits))
+                            losses.append(loss)
+                            #optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
+                            optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
+                            grads_and_vars = optimizer.compute_gradients(loss + l2_loss)
+                            tower_grads.append(grads_and_vars)
+
+                            # splitting concatenated results for different characters
+                            concat_pred = tf.nn.softmax(logits)
+                            preds.append(tf.split(concat_pred, self._num_unrollings))
+        with tf.device('/cpu:0'):
+            with tf.name_scope(device_name_scope('/cpu:0') + '_gradients'):
+                grads_and_vars = average_gradients(tower_grads)
+                grads, v = zip(*grads_and_vars)
+                grads, _ = tf.clip_by_global_norm(grads, 1.)
+                self.train_op = optimizer.apply_gradients(zip(grads, v))
                 self._hooks['train_op'] = self.train_op
+
+                # composing predictions
+                preds_by_char = list()
+                # print('preds:', preds)
+                for one_char_preds in zip(*preds):
+                    # print('one_char_preds:', one_char_preds)
+                    preds_by_char.append(tf.concat(one_char_preds, 0))
+                # print('len(preds_by_char):', len(preds_by_char))
+                self.predictions = tf.concat(preds_by_char, 0)
                 self._hooks['predictions'] = self.predictions
+                # print('self.predictions.get_shape().as_list():', self.predictions.get_shape().as_list())
+                l = 0
+                for loss, gpu_batch_size in zip(losses, self._batch_sizes_on_gpus):
+                    l += float(gpu_batch_size) / float(self._batch_size) * loss
+                self.loss = l
+                self._hooks['loss'] = self.loss
 
     def _validation_graph(self):
         with tf.name_scope('validation'):
@@ -463,6 +488,7 @@ class Lstm(Model):
                  subsequence_length_in_intervals=7,
                  init_parameter=3.,
                  regularization_rate=.000003,
+                 num_gpus=1,
                  regime='train'):
 
         self._hooks = dict(inputs=None,
@@ -477,8 +503,16 @@ class Lstm(Model):
                            randomize_sample_state=None,
                            dropout=None,
                            saver=None)
-
+        self._num_gpus = num_gpus
         self._batch_size = batch_size
+
+        self._gpu_names = get_available_gpus()
+        self._num_available_gpus = len(self._gpu_names)
+        self._num_gpus, self._batch_sizes_on_gpus = get_num_gpus_and_bs_on_gpus(
+            self._batch_size, self._num_gpus, self._num_available_gpus)
+        self._num_gpus = num_gpus
+        self._batch_sizes_on_gpus = self._batch_sizes_on_gpus
+
         self._num_layers = num_layers
         self._num_nodes = num_nodes
         self._vocabulary_size = vocabulary_size
@@ -491,53 +525,74 @@ class Lstm(Model):
         self._num_unrollings = self._subsequence_length_in_intervals * self._connection_interval
         self._init_parameter = init_parameter
         self._regularization_rate = regularization_rate
+        with tf.device('/cpu:0'):
+            self.inputs = tf.placeholder(tf.float32,
+                                         shape=[self._num_unrollings, self._batch_size, self._vocabulary_size])
+            self.labels = tf.placeholder(tf.float32,
+                                         shape=[self._num_unrollings * self._batch_size, self._vocabulary_size])
+            self._hooks['inputs'] = self.inputs
+            self._hooks['labels'] = self.labels
 
-        self.dropout_keep_prob = tf.placeholder(tf.float32, name='dropout_keep_prob')
-        self._hooks['dropout'] = self.dropout_keep_prob
-        self._embedding_matrix = tf.Variable(
-            tf.truncated_normal([self._vocabulary_size, self._embedding_size],
-                                stddev=self._init_parameter*np.sqrt(1./self._vocabulary_size)),
-            name='embedding_matrix')
+            inputs = tf.split(self.inputs, self._batch_sizes_on_gpus, 1)
+            self._inputs_by_device = list()
+            for device_inputs in inputs:
+                self._inputs_by_device.append(tf.unstack(device_inputs))
 
-        self._lstm_matrices = list()
-        self._lstm_biases = list()
-        for layer_idx in range(self._num_layers):
-            input_dim, output_dim, stddev = self._compute_lstm_matrix_parameters(layer_idx)
-            self._lstm_matrices.append(tf.Variable(tf.truncated_normal([input_dim,
-                                                                        output_dim],
-                                                                       stddev=stddev),
-                                                   name='lstm_matrix_%s' % layer_idx))
-            self._lstm_biases.append(tf.Variable(tf.zeros([output_dim]), name='lstm_bias_%s' % layer_idx))
+            labels = tf.reshape(self.labels, shape=(self._num_unrollings, self._batch_size, self._vocabulary_size))
+            labels = tf.split(labels, self._batch_sizes_on_gpus, 1)
+            self._labels_by_device = list()
+            for device_labels in labels:
+                self._labels_by_device.append(tf.reshape(device_labels, [-1, self._vocabulary_size]))
 
-        input_dim = sum(self._num_nodes)
-        output_dim = self._num_layers
-        stddev = self._init_parameter * np.sqrt(1. / input_dim)
-        self._output_gates_matrix = tf.Variable(tf.truncated_normal([input_dim, output_dim],
-                                                                    stddev=stddev),
-                                                name='output_gates_matrix')
+            self.learning_rate = tf.placeholder(tf.float32, name='learning_rate')
+            self._hooks['learning_rate'] = self.learning_rate
 
-        self._output_matrices = list()
-        self._output_biases = list()
-        for layer_idx in range(self._num_output_layers):
-            input_dim, output_dim, stddev = self._compute_output_matrix_parameters(layer_idx)
-            #print('input_dim:', input_dim)
-            #print('output_dim:', output_dim)
-            self._output_matrices.append(tf.Variable(tf.truncated_normal([input_dim, output_dim],
-                                                                         stddev=stddev),
-                                                     name='output_matrix_%s' % layer_idx))
-            self._output_biases.append(tf.Variable(tf.zeros([output_dim])))
+            self.dropout_keep_prob = tf.placeholder(tf.float32, name='dropout_keep_prob')
+            self._hooks['dropout'] = self.dropout_keep_prob
+            self._embedding_matrix = tf.Variable(
+                tf.truncated_normal([self._vocabulary_size, self._embedding_size],
+                                    stddev=self._init_parameter*np.sqrt(1./self._vocabulary_size)),
+                name='embedding_matrix')
 
-        saved_vars = dict()
-        saved_vars['embedding_matrix'] = self._embedding_matrix
-        for layer_idx, (lstm_matrix, lstm_bias) in enumerate(zip(self._lstm_matrices, self._lstm_biases)):
-            saved_vars['lstm_matrix_%s' % layer_idx] = lstm_matrix
-            saved_vars['lstm_bias_%s' % layer_idx] = lstm_bias
-        saved_vars['output_gates_matrix'] = self._output_gates_matrix
-        for layer_idx, (output_matrix, output_bias) in enumerate(zip(self._output_matrices, self._output_biases)):
-            saved_vars['output_matrix_%s' % layer_idx] = output_matrix
-            saved_vars['output_bias_%s' % layer_idx] = output_bias
-        self.saver = tf.train.Saver(saved_vars, max_to_keep=None)
-        self._hooks['saver'] = self.saver
+            self._lstm_matrices = list()
+            self._lstm_biases = list()
+            for layer_idx in range(self._num_layers):
+                input_dim, output_dim, stddev = self._compute_lstm_matrix_parameters(layer_idx)
+                self._lstm_matrices.append(tf.Variable(tf.truncated_normal([input_dim,
+                                                                            output_dim],
+                                                                           stddev=stddev),
+                                                       name='lstm_matrix_%s' % layer_idx))
+                self._lstm_biases.append(tf.Variable(tf.zeros([output_dim]), name='lstm_bias_%s' % layer_idx))
+
+            input_dim = sum(self._num_nodes)
+            output_dim = self._num_layers
+            stddev = self._init_parameter * np.sqrt(1. / input_dim)
+            self._output_gates_matrix = tf.Variable(tf.truncated_normal([input_dim, output_dim],
+                                                                        stddev=stddev),
+                                                    name='output_gates_matrix')
+
+            self._output_matrices = list()
+            self._output_biases = list()
+            for layer_idx in range(self._num_output_layers):
+                input_dim, output_dim, stddev = self._compute_output_matrix_parameters(layer_idx)
+                #print('input_dim:', input_dim)
+                #print('output_dim:', output_dim)
+                self._output_matrices.append(tf.Variable(tf.truncated_normal([input_dim, output_dim],
+                                                                             stddev=stddev),
+                                                         name='output_matrix_%s' % layer_idx))
+                self._output_biases.append(tf.Variable(tf.zeros([output_dim])))
+
+            saved_vars = dict()
+            saved_vars['embedding_matrix'] = self._embedding_matrix
+            for layer_idx, (lstm_matrix, lstm_bias) in enumerate(zip(self._lstm_matrices, self._lstm_biases)):
+                saved_vars['lstm_matrix_%s' % layer_idx] = lstm_matrix
+                saved_vars['lstm_bias_%s' % layer_idx] = lstm_bias
+            saved_vars['output_gates_matrix'] = self._output_gates_matrix
+            for layer_idx, (output_matrix, output_bias) in enumerate(zip(self._output_matrices, self._output_biases)):
+                saved_vars['output_matrix_%s' % layer_idx] = output_matrix
+                saved_vars['output_bias_%s' % layer_idx] = output_bias
+            self.saver = tf.train.Saver(saved_vars, max_to_keep=None)
+            self._hooks['saver'] = self.saver
 
         if regime == 'train':
             self._train_graph()

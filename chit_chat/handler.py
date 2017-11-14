@@ -548,7 +548,7 @@ class Handler(object):
         if print_step_number:
             print('\n'*indent + 'step:', instructions['step'])
         print(instructions['message'])
-        for alias, res in instructions['results'].items():
+        for alias, res in sorted(instructions['results'].items(), key=lambda item: item[0]):
             if not isinstance(res, list):
                 print('%s:' % alias, res)
             else:

@@ -347,7 +347,7 @@ class Lstm(Model):
                 saved_for_connections.append(tf.Variable(tf.zeros([self._batch_size,
                                                                    self._num_layers * self._dim_compressed]),
                                                          trainable=False,
-                                                         name='saved_attention_%s' % idx))
+                                                         name='saved_for_connection_%s' % idx))
 
             self.inputs = tf.placeholder(tf.float32,
                                          shape=[self._num_unrollings, self._batch_size, self._vocabulary_size])
@@ -384,6 +384,7 @@ class Lstm(Model):
                 all_matrices.extend(self._lstm_matrices)
                 all_matrices.extend(self._output_matrices)
                 all_matrices.append(self._output_gates_matrix)
+                all_matrices.append(self._compress_matrix)
                 l2_loss = self._l2_loss(all_matrices)
                 self.loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=self.labels, logits=logits))
                 self.learning_rate = tf.placeholder(tf.float32, name='learning_rate')

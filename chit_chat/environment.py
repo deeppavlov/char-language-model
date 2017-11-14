@@ -1016,8 +1016,8 @@ class Environment(object):
             for addition, add_controller in zip(train_feed_dict_additions, additional_controllers):
                 feed_dict[self._pupil_hooks[addition['placeholder']]] = add_controller.get()
             train_operations = self._handler.get_tensors('train', step)
-            #print('train_operations:', train_operations)
-            #print('feed_dict:', feed_dict)
+            # print('train_operations:', train_operations)
+            # print('feed_dict:', feed_dict)
             train_res = self._session.run(train_operations, feed_dict=feed_dict)
             # here loss is given in bits per input (BPI)
 
