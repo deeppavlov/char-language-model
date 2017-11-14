@@ -366,7 +366,7 @@ class Lstm(Model):
                             all_matrices.append(self._output_gates_matrix)
                             l2_loss = self._l2_loss(all_matrices)
                             loss = tf.reduce_mean(
-                                tf.nn.softmax_cross_entropy_with_logits(labels=self.labels, logits=logits))
+                                tf.nn.softmax_cross_entropy_with_logits(labels=device_labels, logits=logits))
                             losses.append(loss)
                             #optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
                             optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
