@@ -27,7 +27,7 @@ subsequence_length_in_intervals = 10
 
 env.build(batch_size=64,
           num_layers=2,
-          num_nodes=[120, 120],
+          num_nodes=[1200, 1200],
           num_output_layers=2,
           num_output_nodes=[1024],
           vocabulary_size=vocabulary_size,
