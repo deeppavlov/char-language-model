@@ -1,7 +1,7 @@
 
 from environment import Environment
 from vanilla import Vanilla, BatchGenerator
-from lstm_go_par import Lstm, LstmBatchGenerator
+from lstm_par import Lstm, LstmBatchGenerator
 from some_useful_functions import create_vocabulary, get_positions_in_vocabulary
 
 f = open('datasets/ted.txt', 'r', encoding='utf-8')
@@ -24,12 +24,13 @@ env.build(batch_size=64,
           num_output_nodes=[1024],
           vocabulary_size=vocabulary_size,
           embedding_size=128,
-          num_unrollings=10,
-          num_gpus=1)
+          num_unrollings=1,
+          num_gpus=2)
 
-env.inference(restore_path='lstm_go/nu_100_ns200k_nl2_nn1700/checkpoints/40000',
-              log_path='lstm_go/nu_100_ns200k_nl2_nn1700/dialogs/1',
+env.inference(restore_path='lstm/big_network_1700_ted_correct_8.11/checkpoints/final',
+              log_path='lstm/big_network_1700_ted_correct_8.11/dialogs/1',
               vocabulary=vocabulary,
               characters_positions_in_vocabulary=cpiv,
               batch_generator_class=LstmBatchGenerator,
-              temperature=1.)
+              temperature=0,
+              additions_to_feed_dict=[{'placeholder': 'dropout', 'value': 1.}])
