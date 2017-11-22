@@ -1,6 +1,5 @@
 import re
 import os
-import scrapy
 
 from collections import OrderedDict
 
@@ -8,11 +7,11 @@ uppercase_russian = "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЬЫ�
 lowercase_russian = "абвгдеёжзийклмнопрстуфхцчшщьыъэюя"
 russian = uppercase_russian + lowercase_russian
 latin = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-fname_and_lname = re.compile('[%s][%s]+ [%s][%s]+' % (uppercase_russian, lowercase_russian, uppercase_russian, lowercase_russian))
-initials = re.compile('[%s]\.[%s]\.' % (uppercase_russian, uppercase_russian))
-
 punctuation = "'\",\\.;: "
 russian_latin_punctuation = russian + latin + punctuation
+
+fname_and_lname = re.compile('[%s][%s]+ [%s][%s]+' % (uppercase_russian, lowercase_russian, uppercase_russian, lowercase_russian))
+initials = re.compile('[%s]\.[%s]\.' % (uppercase_russian, uppercase_russian))
 
 
 def check_type_layout(sels, year, month):
@@ -208,7 +207,7 @@ def filter_text(text, remove_separating_chars, remove_leading_and_trailing):
     text = re.sub(' {2,}', ' ', text) 
     if remove_leading_and_trailing:
         text = re.sub('[ \t\n\r]+$', '', text)
-        text = re.sub('^[ \t\n\r:]+', '', text)
+        text = re.sub('^[ \t\n\r:\.]+', '', text)
     return text    
 
 
@@ -646,3 +645,28 @@ def retrieve_speakers_marsexx(pars):
         idx += 1
     return speakers, pars[idx:]
 
+
+def expand(perms, remaining):
+    new_ps = list()
+    new_rs = list()
+    for p, r in zip(perms, remaining):
+        for el_idx, el in enumerate(r):
+            new_p = construct(p)
+            for perm in new_p:
+                perm.append(el)
+            new_r = construct(r[:el_idx])
+            new_r.extend(construct(r[el_idx + 1:]))
+            new_ps.append(new_p)
+            new_rs.append(new_r)
+    return new_ps, new_rs
+
+def create_permutations(lst):
+    perms = [[[]]]
+    remaining = [construct(lst)]
+    for _ in range(len(lst)):
+        perms, remaining = expand(perms, remaining)
+    res = list()
+    for perm in perms:
+        for p in perm:
+            res.append(p)
+    return res
