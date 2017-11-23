@@ -10,7 +10,8 @@ latin = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 punctuation = "'\",\\.;: "
 russian_latin_punctuation = russian + latin + punctuation
 
-fname_and_lname = re.compile('[%s][%s]+ [%s][%s]+' % (uppercase_russian, lowercase_russian, uppercase_russian, lowercase_russian))
+fname_and_lname = re.compile('[%s][%s]+ [%s][%s]+' % (uppercase_russian, lowercase_russian,
+                                                      uppercase_russian, lowercase_russian))
 initials = re.compile('[%s]\.[%s]\.' % (uppercase_russian, uppercase_russian))
 
 
@@ -19,7 +20,8 @@ def check_type_layout(sels, year, month):
     for sel in sels:
         types.append(get_elem_type(sel))
     if len(types) % 2 != 0:
-        raise UnexpectedElementsError('Number of h1 and div elements should be even (year: %s, month: %s)' % (year, month),
+        raise UnexpectedElementsError('Number of h1 and div elements should be even (year: %s, month: %s)' %
+                                      (year, month),
                                       len(types),
                                       types,
                                       '[\'h1\', \'div\']*2k',
@@ -28,12 +30,13 @@ def check_type_layout(sels, year, month):
     else:
         correct_types = ['h1', 'div'] * (len(types) // 2)
         if types != correct_types:
-            raise UnexpectedElementsError('h1 and div elements should interchange (year: %s, month: %s)' % (year, month),
-                                      len(types),
-                                      types,
-                                      correct_types,
-                                      year,
-                                      month)
+            raise UnexpectedElementsError('h1 and div elements should interchange (year: %s, month: %s)' %
+                                          (year, month),
+                                          len(types),
+                                          types,
+                                          correct_types,
+                                          year,
+                                          month)
 
 
 def construct(obj):
@@ -157,6 +160,13 @@ def get_elem_type(sel):
     return el_type
 
 
+def get_types_list(l):
+    res = list()
+    for el in l:
+        res.append(get_elem_type(el))
+    return res
+
+
 def process_simple_text(sel):
     return ' ' + f_text(''.join(sel.extract())) + ' '
 
@@ -201,6 +211,8 @@ def process(sel):
 
 
 def filter_text(text, remove_separating_chars, remove_leading_and_trailing):
+    text = re.sub('\\xa0', ' ', text)
+    text = re.sub('&nbsp;', ' ', text)
     text = re.sub('<[^>]*>', ' ', text)
     if remove_separating_chars:
         text = re.sub('(?<!^)[\n\t\r]+(?!$)', ' ', text)
@@ -660,6 +672,7 @@ def expand(perms, remaining):
             new_rs.append(new_r)
     return new_ps, new_rs
 
+
 def create_permutations(lst):
     perms = [[[]]]
     remaining = [construct(lst)]
@@ -670,3 +683,24 @@ def create_permutations(lst):
         for p in perm:
             res.append(p)
     return res
+
+
+def echo_go_par(response, par_idx):
+    relevant = response.xpath(
+        'body[@class="mainpage"]/div[@class="pagecontent"]/div[@class="main"]/div/section[@class="content"]/div')
+    talk_el = relevant.xpath('div[@class="multimedia mmtabs"]/div[@class="mmcontainer"]'
+                             '/div[@class="current mmread"]/div/div[contains(@class, "typical dialog")]')
+    return talk_el.xpath('p[%s]' % par_idx)
+
+
+def unite_lists(*lists):
+    lu = list()
+    for l in lists:
+        lu.extend(l)
+    return lu
+
+
+def replace_yo(s):
+    s = re.sub('ё', 'е', s)
+    s = re.sub('Ё', 'Е', s)
+    return s
