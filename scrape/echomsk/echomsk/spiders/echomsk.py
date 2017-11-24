@@ -9,11 +9,12 @@ spec.loader.exec_module(help)
 import scrapy
 
 
-class science_focus(scrapy.Spider):
-    name = "science_focus"
-    _base_folder = os.path.expanduser("~") + '/Natural-language-encoding/scrape/echomsk/science_focus_res/'
-    _default_speakers = {'original_names': {('Асадова', 'Наргиз'): '0в', ('Быковский', 'Егор'): '1в'},
-                         'map': {'Н. Асадова': '0в', 'Е. Быковский': '1в', 'Н. АСАДОВА': '0в', 'Е. БЫКОВСКИЙ': '1в'}}
+class EchoMsk(scrapy.Spider):
+    name = "echomsk"
+
+    _log_limit = 2000000
+    _total_char_limit = 3000000000000
+    _limit_files = 300
     _std_inf = "\n\tissue_name: %s, page: %s, par_idx: %s, url: %s"
     _notifications = ['Notification 0: number of links on page %s: %s, url: %s',
                       'Notification 1: %s guest is added.\n\tIssue: \'%s\', page: %s, url: %s',
@@ -74,8 +75,43 @@ class science_focus(scrapy.Spider):
                "Error 29: empty replica" + _std_inf]
     _log_templates = help.unite_lists(_notifications, _warnings, _errors)
 
+    @staticmethod
+    def _form_default_speakers(names):
+        speaker_names = names.split(', ')
+        speakers_dict = {'original_names': {},
+                         'map': {}}
+        for idx, name in enumerate(speaker_names):
+            if len(name) > 0:
+                tpl = tuple(name.split())
+                speakers_dict['original_names'][tpl] = str(idx) + 'в'
+                speakers_dict['map'][name] = str(idx) + 'в'
+                speakers_dict['map'][name.upper()] = str(idx) + 'в'
+                speakers_dict['map'][tpl[0][0] + '. ' + tpl[1]] = str(idx) + 'в'
+                speakers_dict['map'][(tpl[0][0] + '. ' + tpl[1]).upper()] = str(idx) + 'в'
+        return speakers_dict
+
+    def __init__(self,
+                 start_url='https://echo.msk.ru/programs/naukafokus/',
+                 num_pages=6,
+                 res_folder_name='science_focus_res',
+                 names='Асадова Наргиз, Быковский Егор',
+                 *args, **kwargs):
+        super(EchoMsk, self).__init__(*args, **kwargs)
+        self._folder_index = 0
+        self._log_index = 0
+        self._col_chars = 0
+        self._start_url = start_url
+        self._num_pages = int(num_pages)
+        if res_folder_name[0] == '/':
+            self._base_folder = res_folder_name
+        else:
+            self._base_folder = os.path.expanduser("~") + '/Natural-language-encoding/scrape/echomsk/'\
+                                + res_folder_name + '/'
+        self._names = names
+        self._default_speakers = self._form_default_speakers(self._names)
+
     def _save_logs_description(self):
-        with open(self._base_folder + 'logs.txt', 'a') as f:
+        with open(self._base_folder + 'logs#%s.txt' % self._log_index, 'a') as f:
             f.write('----DESCRIPTION----\n')
             for tmpl in self._log_templates:
                 f.write(tmpl + '\n')
@@ -83,8 +119,10 @@ class science_focus(scrapy.Spider):
 
     def _log(self, msg):
         # print('logging')
-        with open(self._base_folder + 'logs.txt', 'a') as f:
+        with open(self._base_folder + 'logs#%s.txt' % self._log_index, 'a') as f:
             f.write(msg + '\n')
+            if f.tell() > self._log_limit:
+                self._log_index += 1
 
     def _log_error(self, err_num, to_interpolate):
         try:
@@ -199,9 +237,10 @@ class science_focus(scrapy.Spider):
                         f.write('\n')
                     f.write(descriptor + ': ' + leader)
                 tpl = tuple(leader.split())
-                speakers_dict['original_names'][tpl] = descriptor
-                speakers_dict = self._add_speaker_abbreviations(
-                    speakers_dict, tpl, descriptor, issue_name, page_idx, url)
+                if len(tpl) > 0:
+                    speakers_dict['original_names'][tpl] = descriptor
+                    speakers_dict = self._add_speaker_abbreviations(
+                        speakers_dict, tpl, descriptor, issue_name, page_idx, url)
             else:
                 matches = help.get_matches(leader, speakers_dict['original_names'])
                 if len(matches) == 0:
@@ -254,7 +293,7 @@ class science_focus(scrapy.Spider):
     @staticmethod
     def _correct_format(string):
         # "А. Каменский"
-        f1 = re.search('^([%s]\.){1,2} *[%s][%s]+' % (help.uppercase_russian, help.uppercase_russian, help.lowercase_russian),
+        f1 = re.search('^([%s]\.*){1,2} *[%s][%s]+' % (help.uppercase_russian, help.uppercase_russian, help.lowercase_russian),
                        string)
         if f1 is None:
             return False
@@ -387,7 +426,7 @@ class science_focus(scrapy.Spider):
             all_text_nodes = [par]
         bold = par.xpath('b')
         if len(all_text_nodes) == 0:
-            self._log_error(13, std_inf)
+            self._log_error(13, help.unite_lists([par.extract()], std_inf))
         else:
             all_text_nodes = self._strip_empty_start(all_text_nodes)
             if len(all_text_nodes) == 0:
@@ -432,14 +471,17 @@ class science_focus(scrapy.Spider):
                             # print("(_parse_several_replicas_paragraph)replica:", replica)
                             replica = help.filter_text(replica, True, True)
                             fd.write(replica)
+                            self._col_chars += len(replica)
                             replica = ''
                             if fd.tell() > 0:
                                 fd.write('\n')
+                                self._col_chars += 1
                             if fd.tell() == start:
                                 self._log_error(29, std_inf)
                             start = fd.tell()
                             speaker_descr = new_speaker_descr
                             fd.write('<%s>' % speaker_descr)
+                            self._col_chars += 2 + len(speaker_descr)
                         if re.search('НОВОСТИ', t) is None and re.search('РЕКЛАМА', t) is None:
                             replica += t
                     else:
@@ -499,9 +541,9 @@ class science_focus(scrapy.Spider):
         help.create_path(self._base_folder)
         self._save_logs_description()
         help.create_path(self._base_folder)
-        urls = ['https://echo.msk.ru/programs/naukafokus/']
-        for i in range(2, 7):
-            urls.append('https://echo.msk.ru/programs/naukafokus/archive/%s.html' % i)
+        urls = [self._start_url]
+        for i in range(2, self._num_pages + 1):
+            urls.append(self._start_url + 'archive/%s.html' % i)
         for page_idx, url in enumerate(urls):
             request = scrapy.Request(url=url, callback=self._page)
             request.meta['page_idx'] = page_idx
@@ -556,10 +598,11 @@ class science_focus(scrapy.Spider):
         # print("(_issue_page)speakers['map']:", speakers['map'])
         talk_el = relevant.xpath('div[@class="multimedia mmtabs"]/div[@class="mmcontainer"]'
                                  '/div[@class="current mmread"]/div/div[contains(@class, "typical")]')
-        if len(talk_el) == 0:
-            self._log_error(26, (issue_name, page_idx, url))
-        else:
-            self._parse_talk(talk_el, speakers, issue_name, page_idx, url, issue_folder)
+        if self._col_chars < self._total_char_limit:
+            if len(talk_el) == 0:
+                self._log_error(26, (issue_name, page_idx, url))
+            else:
+                self._parse_talk(talk_el, speakers, issue_name, page_idx, url, issue_folder)
      
          
         
