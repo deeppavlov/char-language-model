@@ -82,9 +82,9 @@ class GordonSpider(scrapy.Spider):
     def _transcript_page(self, response):
         folder_name = response.meta['folder_name']
         issue_name = response.meta['issue_name']
-        # print('(on trascript page) issue_name:', issue_name)
+        # print('(on transcript page) issue_name:', issue_name)
         transcript_file_name = folder_name + '/transcript.txt'
-        trascript_roles_file_name = folder_name + '/trascript_roles.txt'
+        transcript_roles_file_name = folder_name + '/transcript_roles.txt'
         par_sels = response.xpath('//body/p')
         # print("('%s') len(par_sels):" % issue_name, len(par_sels))
         speaker_list, par_sels = retrieve_speakers(par_sels)
@@ -99,7 +99,7 @@ class GordonSpider(scrapy.Spider):
         for speaker_idx, speaker in enumerate(speaker_list):
             speakers['original_names'][tuple(speaker.split())] = speaker_idx + 1
 
-        with open(trascript_roles_file_name, 'w') as fd:
+        with open(transcript_roles_file_name, 'w') as fd:
             for name, speaker_idx in speakers['original_names'].items():
                 fd.write(str(speaker_idx) + ':')
                 for word in name:

@@ -41,7 +41,9 @@ class Gordon0030(scrapy.Spider):
             yield request
 
     def _month_page(self, response):
-        headers_and_content = response.xpath('//body/li/div[not(@align="center")] | //body/li/h1[@align="center"] | //body/li/h4[text()="Сноски"]')
+        relevant = response.xpath('//body/li')
+        headers_and_content = relevant.xpath('div[not(@align="center")] | h1[@align="center"] |'
+                                             ' h4[text()="Сноски"]')
         idx = 0
         snoska_idx = None
         while snoska_idx is None and idx < len(headers_and_content):
@@ -59,7 +61,8 @@ class Gordon0030(scrapy.Spider):
             issue_name = self._get_issue_name(header, year, month, idx)
             text_nodes = content.xpath('text() | b | i | nobr | blockquote')
             speaker_list, sels = retrieve_speakers0030(text_nodes)
-            # print('issue_name:', issue_name, 'len(sels):', len(sels), 'len(text_nodes):', len(text_nodes), 'speakers:', speakers, 'content:', content)
+            print('issue_name:', issue_name, 'len(sels):', len(sels), 'len(text_nodes):', len(text_nodes),
+                  'speakers:', speaker_list, 'content:', content)
             folder_name = self._base_folder + issue_name
             folder_name = add_index_to_filename_if_needed(folder_name)
             create_path(folder_name)
