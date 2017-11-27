@@ -1,5 +1,6 @@
 from environment import Environment
-from residuals_no_authors_no_sampling import Lstm, LstmBatchGenerator
+# from residuals_no_authors_no_sampling import Lstm, LstmBatchGenerator
+from lstm_go import Lstm, LstmBatchGenerator
 from some_useful_functions import create_vocabulary, get_positions_in_vocabulary
 
 f = open('datasets/ted.txt', 'r', encoding='utf-8')
@@ -22,7 +23,7 @@ env = Environment(Lstm, LstmBatchGenerator)
 cpiv = get_positions_in_vocabulary(vocabulary)
 
 evaluation = dict(
-    save_path='residuals_no_authors_no_sampling/parameter_tuning/1_tanh',
+    save_path='residuals_no_authors_no_sampling/parameter_tuning/just_lstm_go',
     result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
     datasets={'train': None,
               'default_1': [valid_text, 'default_1']},
@@ -32,6 +33,20 @@ evaluation = dict(
     additional_feed_dict=[{'placeholder': 'dropout', 'value': 1.}]
 )
 
+# kwargs_for_building = dict(
+#           batch_size=64,
+#           num_layers=2,
+#           num_nodes=[1000, 1000],
+#           num_output_layers=2,
+#           num_output_nodes=[1000],
+#           vocabulary_size=vocabulary_size,
+#           dim_compressed=10,
+#           connection_interval=3,
+#           subsequence_length_in_intervals=10,
+#           connection_visibility=9,
+#           init_parameter=3.,
+#           regularization_rate=.00001)
+
 kwargs_for_building = dict(
           batch_size=64,
           num_layers=2,
@@ -39,12 +54,10 @@ kwargs_for_building = dict(
           num_output_layers=2,
           num_output_nodes=[1000],
           vocabulary_size=vocabulary_size,
-          connection_interval=3,
-          subsequence_length_in_intervals=10,
-          connection_visibility=9,
+          # dim_compressed=10,
+          num_unrollings=30,
           init_parameter=3.,
           regularization_rate=.00001)
-
 
 # env.grid_search(evaluation,
 #                      kwargs_for_building,
@@ -65,9 +78,9 @@ kwargs_for_building = dict(
 
 env.grid_search(evaluation,
                      kwargs_for_building,
-                     build_hyperparameters={'init_parameter': [1., 1.3, 1.7, 2., 2.5, 3., 3.5, 4.]},
+                     build_hyperparameters={'init_parameter': [.5, 1., 1.5, 2., 2.7, 4.]},
                      #other_hyperparameters={'dropout': [.3, .5, .7, .8, .9, .95]},
-                other_hyperparameters={'learning_rate': {'varying': {'init': [.0005, .0007, .001, .0013, .0015, .0017, .002, .0024, .003]},
+                other_hyperparameters={'learning_rate': {'varying': {'init': [10., 7., 4., 2., 1., .5]},
                                                          'fixed': {'decay': 1., 'period': 1000},
                                                          'hp_type': 'built-in',
                                                          'type': 'exponential_decay'}},

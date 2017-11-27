@@ -30,14 +30,14 @@ env = Environment(SimpleFontain, SimpleFontainBatcher)
 #           attention_interval=3,
 #           attention_visibility=5,
 #           subsequence_length_in_intervals=7,
-#           characters_positions_in_vocabulary=cpiv)
+#           character_positions_in_vocabulary=cpiv)
 
 # env.build(batch_size=2,
 #           vocabulary_size=vocabulary_size,
 #           attention_interval=2,
 #           attention_visibility=2,
 #           subsequence_length_in_intervals=2,
-#           characters_positions_in_vocabulary=cpiv)
+#           character_positions_in_vocabulary=cpiv)
 
 def count_non_zeros(**kwargs):
     tensor = kwargs['tensor']
@@ -197,7 +197,7 @@ kwargs_for_building = dict(
           attention_interval=3,
           attention_visibility=5,
           subsequence_length_in_intervals=7,
-          characters_positions_in_vocabulary=cpiv)
+          character_positions_in_vocabulary=cpiv)
 
 # list_of_lr = [dict(type='exponential_decay', init=v, decay=.9, period=500, name='learning_rate') for v in [3.]]
 
@@ -239,7 +239,7 @@ env.grid_search(evaluation,
 #           attention_interval=2,
 #           attention_visibility=2,
 #           subsequence_length_in_intervals=2,
-#           characters_positions_in_vocabulary=cpiv)
+#           character_positions_in_vocabulary=cpiv)
 #
 # # list_of_lr = [
 # #     dict(type='exponential_decay', init=v, decay=.9, period=500, name='learning_rate') for v in [10., 5., 3., 1., .3]]

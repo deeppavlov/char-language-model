@@ -28,6 +28,7 @@ class science_spider(scrapy.Spider):
         for ref_el in ref_els:
             href = ''.join(ref_el.xpath('@href').extract())
             name = ''.join(ref_el.xpath('text()').extract())
+            name = ' '.join(name.split()[:15])
             if len(name) == 0:
                 self._log('Error: no issue name in reference element ---%s--- on page %s' % (ref_el.extract_first(), page_idx))
             if len(href) == 0:
@@ -270,7 +271,7 @@ class science_spider(scrapy.Spider):
         urls = ['https://radiovesti.ru/brand/60941/page/%s/' % i for i in range(1, 10)]
         for page_idx, url in enumerate(urls):
             request = scrapy.Request(url=url, callback=self._page)
-            request.meta['page_idx'] = page_idx
+            request.meta['page_idx'] = page_idx + 1
             yield request
 
     def _page(self, response):
@@ -293,6 +294,7 @@ class science_spider(scrapy.Spider):
         issue_name = response.meta['issue_name']
         page_idx = response.meta['page']
         issue_folder = self._base_folder + issue_name
+        issue_folder = help.add_index_to_filename_if_needed(issue_folder)
         help.create_path(issue_folder)
         relevant = response.xpath('//body/div/div[@class="main"]/div/div[@class="main__content"]/div')
         if len(relevant) == 0:

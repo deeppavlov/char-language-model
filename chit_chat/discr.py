@@ -34,7 +34,8 @@ env.build(batch_size=64,
           vocabulary_size=vocabulary_size,
           embedding_size=128,
           #num_gpus=2,
-          num_unrollings=10)
+          num_unrollings=10,
+          regime='inference')
 
 env.generate_discriminator_dataset(1000000, 1, test_text, 200, 'new_line',
                                    #'lstm/big_network_1700_ted_correct_8.11/checkpoints/final',

@@ -6,35 +6,35 @@ from model import Model
 from some_useful_functions import create_vocabulary, char2id, get_positions_in_vocabulary, construct, flatten
 
 
-def char2vec(characters_positions_in_vocabulary,
+def char2vec(character_positions_in_vocabulary,
              char,
              speaker_flag_size=2,
              speaker_idx=0,
              bot_answer_flag=0,
              eod=False):
-    voc_size = len(characters_positions_in_vocabulary)
+    voc_size = len(character_positions_in_vocabulary)
     vec = np.zeros(shape=(1, voc_size + speaker_flag_size + 2), dtype=np.float32)
-    vec[0, char2id(char, characters_positions_in_vocabulary)] = 1.0
+    vec[0, char2id(char, character_positions_in_vocabulary)] = 1.0
     vec[0, voc_size + speaker_idx] = 1.0
     vec[0, voc_size + speaker_flag_size] = float(bot_answer_flag)
     vec[0, voc_size + speaker_flag_size + 1] = float(eod)
     return vec
 
 
-def char_2_base_vec(characters_positions_in_vocabulary,
+def char_2_base_vec(character_positions_in_vocabulary,
                     char):
-    voc_size = len(characters_positions_in_vocabulary)
+    voc_size = len(character_positions_in_vocabulary)
     vec = np.zeros(shape=(1, voc_size), dtype=np.float32)
-    vec[0, char2id(char, characters_positions_in_vocabulary)] = 1.0
+    vec[0, char2id(char, character_positions_in_vocabulary)] = 1.0
     return vec
 
 
 def add_flags_2_simple_text(input_file_name,
                             output_file_name,
                             eod_interval):
-    input_f = open(input_file_name, 'r', encoding='utf-8')
+    input_f = open(input_file_name, 'r')
     lines = input_f.readlines()
-    output_f = open(output_file_name, 'w', encoding='utf-8')
+    output_f = open(output_file_name, 'w')
     replicas_counter = 0
     for line in lines:
         output_f.write('<%s>' % (replicas_counter % 2))
@@ -99,7 +99,7 @@ class SimpleFontainBatcher(object):
         self._batch_size = batch_size
         self._vocabulary = vocabulary
         self._vocabulary_size = len(self._vocabulary)
-        self._characters_positions_in_vocabulary = get_positions_in_vocabulary(self._vocabulary)
+        self._character_positions_in_vocabulary = get_positions_in_vocabulary(self._vocabulary)
         self._num_unrollings = num_unrollings
         segment = self._text_size // batch_size
         self._cursor = [offset * segment for offset in range(batch_size)]
@@ -111,11 +111,11 @@ class SimpleFontainBatcher(object):
     def get_vocabulary_size(self):
         return self._vocabulary_size
 
-    def _start_batch(self):
-        batch = np.zeros(shape=(self._batch_size, self._vocabulary_size), dtype=np.float32)
-        for b in range(self._batch_size):
-            batch[b, char2id('\n', self._characters_positions_in_vocabulary)] = 1.0
-        return batch
+    # def _start_batch(self):
+    #     batch = np.zeros(shape=(self._batch_size, self._vocabulary_size), dtype=np.float32)
+    #     for b in range(self._batch_size):
+    #         batch[b, char2id('\n', self._character_positions_in_vocabulary)] = 1.0
+    #     return batch
 
     def _start_batch(self):
         base = np.zeros(shape=(self._batch_size, self._vocabulary_size), dtype=np.float32)
@@ -123,7 +123,7 @@ class SimpleFontainBatcher(object):
         speaker_flags = np.zeros(shape=(self._batch_size, self._number_of_speakers))
         eod_flags = np.zeros(shape=(self._batch_size, 1), dtype=np.float32)
         for b in range(self._batch_size):
-            base[b, char2id('\n', self._characters_positions_in_vocabulary)] = 1.0
+            base[b, char2id('\n', self._character_positions_in_vocabulary)] = 1.0
             speaker_flags[b, 1] = 1.
             bot_answer_flags[b, 0] = 0.
         start_inputs = np.concatenate((base, speaker_flags, bot_answer_flags, eod_flags), 1)
@@ -140,7 +140,7 @@ class SimpleFontainBatcher(object):
         speaker_flags = np.zeros(shape=(self._batch_size, self._number_of_speakers), dtype=np.float32)
         eod_flags = np.zeros(shape=(self._batch_size, 1), dtype=np.float32)
         for b in range(self._batch_size):
-            base[b, char2id(self._text[self._cursor[b]], self._characters_positions_in_vocabulary)] = 1.0
+            base[b, char2id(self._text[self._cursor[b]], self._character_positions_in_vocabulary)] = 1.0
             speaker_flags[b, self._speaker_flags[self._cursor[b]]] = 1.0
             eod_flags[b, 0] = float(self._eod_flags[self._cursor[b]])
             bot_answer_flags[b, 0] = float(self._bot_answer_flags[self._cursor[b]])
@@ -150,7 +150,7 @@ class SimpleFontainBatcher(object):
         return inputs, labels
 
     def char2vec(self, char, speaker_idx, eod):
-        return np.stack(char2vec(self._characters_positions_in_vocabulary,
+        return np.stack(char2vec(self._character_positions_in_vocabulary,
                                  char,
                                  speaker_flag_size=self._num_of_speakers,
                                  speaker_idx=speaker_idx,
@@ -260,7 +260,7 @@ class SimpleFontain(Model):
         current_batch_size = answer.get_shape().as_list()[0]
         speaker_flags = tf.constant(np.zeros([current_batch_size, self._flag_size], dtype=np.float32))
         answer = tf.concat([answer, speaker_flags], 1)
-        delimiter_vec = char2vec(self._characters_positions_in_vocabulary,
+        delimiter_vec = char2vec(self._character_positions_in_vocabulary,
                                  self._replica_delimiter,
                                  speaker_flag_size=self._flag_size,
                                  speaker_idx=0,
@@ -372,7 +372,7 @@ class SimpleFontain(Model):
             reset_list = list()
             name = self._extract_op_name(saved_last_sample_predictions.name)
             reset_list.append(tf.assign(saved_last_sample_predictions,
-                                        np.tile(char_2_base_vec(self._characters_positions_in_vocabulary,
+                                        np.tile(char_2_base_vec(self._character_positions_in_vocabulary,
                                                                 self._replica_delimiter),
                                                 (1, 1)),
                                         name='assign_reset_%s' % name))
@@ -439,7 +439,7 @@ class SimpleFontain(Model):
                  subsequence_length_in_intervals=7,
                  init_parameter=.3,
                  replica_delimiter='\n',
-                 characters_positions_in_vocabulary=None):
+                 character_positions_in_vocabulary=None):
         self._batch_size = batch_size
         self._num_layers = num_layers
         self._num_nodes = num_nodes
@@ -453,7 +453,7 @@ class SimpleFontain(Model):
         self._num_unrollings = self._subsequence_length_in_intervals * self._attention_interval
         self._init_parameter = init_parameter
         self._replica_delimiter = replica_delimiter
-        self._characters_positions_in_vocabulary = characters_positions_in_vocabulary
+        self._character_positions_in_vocabulary = character_positions_in_vocabulary
 
         self.Matrices = list()
         self.Biases = list()
@@ -540,7 +540,7 @@ class SimpleFontain(Model):
                 saved_for_attention.append(tf.Variable(tf.zeros([self._batch_size, sum(self._num_nodes)]),
                                                        trainable=False,
                                                        name='saved_attention_%s' % idx))
-            saved_last_predictions = tf.Variable(np.tile(char_2_base_vec(self._characters_positions_in_vocabulary,
+            saved_last_predictions = tf.Variable(np.tile(char_2_base_vec(self._character_positions_in_vocabulary,
                                                                          self._replica_delimiter),
                                                          (self._batch_size, 1)),
                                                  trainable=False,
@@ -641,7 +641,7 @@ class SimpleFontain(Model):
                                                        name=saved_state_templ % (i, 1))))
 
             saved_last_sample_predictions = tf.Variable(
-                np.tile(char_2_base_vec(self._characters_positions_in_vocabulary,
+                np.tile(char_2_base_vec(self._character_positions_in_vocabulary,
                                         self._replica_delimiter),
                         (1, 1)),
                 trainable=False,
@@ -707,7 +707,6 @@ class SimpleFontain(Model):
                                                        [saved_sample_from_attention, sample_from_attention],
                                                        [saved_sample_counter, sample_counter])
             sample_save_list.extend(self._compose_save_list_secure([saved_sample_for_attention, sample_for_attention]))
-
 
             reset_list = self._compose_reset_list(saved_last_sample_predictions,
                                                   saved_sample_state,

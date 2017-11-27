@@ -63,6 +63,9 @@ class Controller(object):
                 self._last_values.append(self._value_controllers[-1].get())
             self.get = self._changes_detector
 
+        elif self._specifications['type'] == 'linear':
+            self.get = self._linear
+
     def _changes_detector(self):
         something_changed = False
         for idx, (last_value, controller) in enumerate(zip(self._last_values, self._value_controllers)):
@@ -75,6 +78,16 @@ class Controller(object):
         num_stairs = self._storage['step'] // self._specifications['period']
         returned_value = self._specifications['init']
         return returned_value * self._specifications['decay']**num_stairs
+
+    def _linear(self):
+        start = self._specifications['start']
+        end = self._specifications['end']
+        step_interval = self._specifications['interval']
+        step = self._storage['step']
+        if step < step_interval:
+            return start + (end - start) * step / step_interval
+        else:
+            return end
 
     def _limit_steps(self):
         if self._storage['step'] > self._specifications['limit']:
@@ -1018,6 +1031,7 @@ class Environment(object):
             train_operations = self._handler.get_tensors('train', step)
             # print('train_operations:', train_operations)
             # print('feed_dict:', feed_dict)
+
             train_res = self._session.run(train_operations, feed_dict=feed_dict)
             # here loss is given in bits per input (BPI)
 
@@ -1426,12 +1440,12 @@ class Environment(object):
             if human_replica != '':
                 print_and_log('Human: ' + human_replica, _print=False, fd=fd)
                 for char in human_replica:
-                    feed = batch_generator_class.char2vec(char, characters_positions_in_vocabulary)
+                    feed = batch_generator_class.char2vec(char, characters_positions_in_vocabulary, 0, 2)
                     # print('feed.shape:', feed.shape)
                     feed_dict = dict(feed_dict_base.items())
                     feed_dict[sample_input] = feed
                     _ = sample_prediction.eval(feed_dict=feed_dict, session=self._session)
-            feed = batch_generator_class.char2vec('\n', characters_positions_in_vocabulary)
+            feed = batch_generator_class.char2vec('\n', characters_positions_in_vocabulary, 0, 2)
             feed_dict = dict(feed_dict_base.items())
             feed_dict[sample_input] = feed
             prediction = sample_prediction.eval(feed_dict=feed_dict, session=self._session)
@@ -1443,7 +1457,7 @@ class Environment(object):
             bot_replica = ""
             # print('ord(\'\\n\'):', ord('\n'))
             while char != '\n' and counter < 500:
-                feed = batch_generator_class.pred2vec(prediction)
+                feed = batch_generator_class.pred2vec(prediction, 1, 2)
                 # print('prediction after sampling:', prediction)
                 # print('feed:', feed)
                 feed_dict = dict(feed_dict_base.items())
@@ -1461,7 +1475,7 @@ class Environment(object):
                     bot_replica += char
                 counter += 1
             print_and_log('Bot: ' + bot_replica, fd=fd)
-            feed = batch_generator_class.char2vec('\n', characters_positions_in_vocabulary)
+            feed = batch_generator_class.char2vec('\n', characters_positions_in_vocabulary, 1, 2)
             feed_dict = dict(feed_dict_base.items())
             feed_dict[sample_input] = feed
             _ = sample_prediction.eval(feed_dict=feed_dict, session=self._session)
@@ -1487,7 +1501,7 @@ class Environment(object):
         if vocabulary is None and self._vocabulary is None:
             raise InvalidArgumentError(
                 'Vocabulary has to be provided either to Environment constructor' +
-                ' or to generate_discriminator_dataset method')
+                ' or to generate_discriminator_dataset method', None, 'vocabulary', 'list of chars')
         elif vocabulary is None:
             vocabulary = self._vocabulary
 

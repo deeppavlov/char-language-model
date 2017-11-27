@@ -389,8 +389,8 @@ class Lstm(Model):
                 self.learning_rate = tf.placeholder(tf.float32, name='learning_rate')
                 self._hooks['loss'] = self.loss
                 self._hooks['learning_rate'] = self.learning_rate
-                #optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
-                optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
+                optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
+                # optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
                 gradients, v = zip(*optimizer.compute_gradients(self.loss + l2_loss))
                 gradients, _ = tf.clip_by_global_norm(gradients, 1.)
                 self.train_op = optimizer.apply_gradients(zip(gradients, v))

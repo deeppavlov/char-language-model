@@ -478,9 +478,9 @@ class Lstm(Model):
     def __init__(self,
                  batch_size=64,
                  num_layers=2,
-                 num_nodes=[112, 112],
+                 num_nodes=None,
                  num_output_layers=1,
-                 num_output_nodes=[],
+                 num_output_nodes=None,
                  vocabulary_size=None,
                  embedding_size=128,
                  connection_interval=3,
@@ -490,6 +490,11 @@ class Lstm(Model):
                  regularization_rate=.000003,
                  num_gpus=1,
                  regime='train'):
+
+        if num_nodes is None:
+            num_nodes = [100, 100]
+        if num_output_nodes is None:
+            num_output_nodes = []
 
         self._hooks = dict(inputs=None,
                            labels=None,

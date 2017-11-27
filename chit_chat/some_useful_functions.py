@@ -38,15 +38,15 @@ def create_vocabulary(text):
 
 
 def get_positions_in_vocabulary(vocabulary):
-    characters_positions_in_vocabulary = dict()
+    character_positions_in_vocabulary = dict()
     for idx, char in enumerate(vocabulary):
-        characters_positions_in_vocabulary[char] = idx
-    return characters_positions_in_vocabulary
+        character_positions_in_vocabulary[char] = idx
+    return character_positions_in_vocabulary
 
 
-def char2id(char, characters_positions_in_vocabulary):
-    if char in characters_positions_in_vocabulary:
-        return characters_positions_in_vocabulary[char]
+def char2id(char, character_positions_in_vocabulary):
+    if char in character_positions_in_vocabulary:
+        return character_positions_in_vocabulary[char]
     else:
         print(u'Unexpected character: %s\nUnexpected character number: %s\n' % (char, ord(char)))
         return None
@@ -94,6 +94,14 @@ def vec2char(pred, vocabulary):
         return char_list[0]
     else:
         return char_list
+
+
+def char_2_base_vec(character_positions_in_vocabulary,
+                    char):
+    voc_size = len(character_positions_in_vocabulary)
+    vec = np.zeros(shape=(1, voc_size), dtype=np.float32)
+    vec[0, char2id(char, character_positions_in_vocabulary)] = 1.0
+    return vec
 
 
 def create_and_save_vocabulary(input_file_name,
