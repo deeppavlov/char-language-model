@@ -269,6 +269,7 @@ class Handler(object):
                 mean = 0.
             else:
                 mean = mean / counter
+            print('(stop_accumulation)counter:', counter)
             if self._save_path is not None:
                 if save_to_file:
                     file_name = self._dataset_specific[self._name_of_dataset_on_which_accumulating]['files'][key]

@@ -95,6 +95,10 @@ class SimpleFontainBatcher(object):
         tmp_output = process_input_text(text)
         [self._text, self._eod_flags, self._speaker_flags,
          self._bot_answer_flags, self._number_of_speakers] = tmp_output
+        # print('self._speaker_flags:', self._speaker_flags[:5000])
+        # print('self._eod_flags:', self._eod_flags[:5000])
+        # print('self._bot_answer_flags:', self._bot_answer_flags[:5000])
+        # print('self._text:', self._text[:5000])
         self._text_size = len(self._text)
         self._batch_size = batch_size
         self._vocabulary = vocabulary
@@ -104,6 +108,7 @@ class SimpleFontainBatcher(object):
         segment = self._text_size // batch_size
         self._cursor = [offset * segment for offset in range(batch_size)]
         self._last_inputs, _ = self._start_batch()
+        print('self._number_of_speakers:', self._number_of_speakers)
 
     def get_dataset_length(self):
         return len(self._text)
@@ -255,22 +260,23 @@ class SimpleFontain(Model):
                                 inp,
                                 predictions,
                                 bot_answer_flags):
-        answer = tf.reduce_max(predictions, axis=1, keep_dims=True)
-        answer = tf.to_float(tf.equal(predictions, answer))
-        current_batch_size = answer.get_shape().as_list()[0]
-        speaker_flags = tf.constant(np.zeros([current_batch_size, self._flag_size], dtype=np.float32))
-        answer = tf.concat([answer, speaker_flags], 1)
-        delimiter_vec = char2vec(self._character_positions_in_vocabulary,
-                                 self._replica_delimiter,
-                                 speaker_flag_size=self._flag_size,
-                                 speaker_idx=0,
-                                 bot_answer_flag=1,
-                                 eod=False)
-        [delimiter_vec, _] = np.split(delimiter_vec, [self._vocabulary_size + self._flag_size], axis=1)
-        input_is_not_delimiter = tf.not_equal(tf.reduce_sum(inp*delimiter_vec, axis=1, keep_dims=True), 1.)
-        bot_answer_flags = tf.cast(bot_answer_flags, tf.bool)
-        mask = tf.to_float(tf.logical_and(bot_answer_flags, input_is_not_delimiter))
-        return mask * answer + (1. - mask) * inp
+        with tf.name_scope('force_or_sample'):
+            answer = tf.reduce_max(predictions, axis=1, keep_dims=True)
+            answer = tf.to_float(tf.equal(predictions, answer))
+            current_batch_size = answer.get_shape().as_list()[0]
+            speaker_flags = tf.slice(inp, [0, self._vocabulary_size], [current_batch_size, 2], name='sliced_flags')
+            answer = tf.concat([answer, speaker_flags], 1)
+            delimiter_vec = char2vec(self._character_positions_in_vocabulary,
+                                     self._replica_delimiter,
+                                     speaker_flag_size=self._flag_size,
+                                     speaker_idx=0,
+                                     bot_answer_flag=1,
+                                     eod=False)
+            [delimiter_vec, _] = np.split(delimiter_vec, [self._vocabulary_size + self._flag_size], axis=1)
+            input_is_not_delimiter = tf.not_equal(tf.reduce_sum(inp*delimiter_vec, axis=1, keep_dims=True), 1.)
+            bot_answer_flags = tf.cast(bot_answer_flags, tf.bool)
+            mask = tf.to_float(tf.logical_and(bot_answer_flags, input_is_not_delimiter), name='mask')
+            return mask * answer + (1. - mask) * inp
 
     def _embed(self, inp):
         return tf.matmul(inp, self._embedding_matrix) + self._embedding_bias
@@ -547,9 +553,11 @@ class SimpleFontain(Model):
                                                  name='saved_last_predictions')
 
             self.inputs = tf.placeholder(tf.float32, shape=[self._num_unrollings, self._batch_size,
-                                                            self._vocabulary_size + self._flag_size + 2])
+                                                            self._vocabulary_size + self._flag_size + 2],
+                                         name='inputs')
             self.labels = tf.placeholder(tf.float32, shape=[self._batch_size*self._num_unrollings,
-                                                            self._vocabulary_size + 1])
+                                                            self._vocabulary_size + 1],
+                                         name='values')
 
             [inputs, bot_answer_flags, eod_flags] = tf.split(self.inputs,
                                                              [self._vocabulary_size + self._flag_size, 1, 1],

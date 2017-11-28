@@ -5,7 +5,7 @@ import tensorflow as tf
 from some_useful_functions import (construct, create_vocabulary, char_2_base_vec,
                                    get_positions_in_vocabulary, pred2vec, vec2char,
                                    char2id, id2char, flatten, get_available_gpus, device_name_scope,
-                                   average_gradients, get_num_gpus_and_bs_on_gpus)
+                                   average_gradients, average_gradients_not_balanced, get_num_gpus_and_bs_on_gpus)
 
 
 url = 'http://mattmahoney.net/dc/'
@@ -75,6 +75,11 @@ class LstmBatchGenerator(object):
     def __init__(self, text, batch_size, num_unrollings=1, vocabulary=None):
         tmp_output = process_input_text(text)
         [self._text, self._speaker_flags, self._bot_speaks_flags] = tmp_output
+        # print('self._speaker_flags:', self._speaker_flags[:5000])
+        # print('self._bot_speaks_flags:', self._bot_speaks_flags[:5000])
+        # print('self._text:', self._text[:5000])
+        # print('len(self._bot_speaks_flags):', len(self._bot_speaks_flags))
+        # print('sum(self._bot_speaks_flags):', sum(self._bot_speaks_flags))
         self._text_size = len(self._text)
         self._batch_size = batch_size
         self._vocabulary = vocabulary
@@ -244,29 +249,30 @@ class Lstm(Model):
 
     def _generate_random(self, shape, one_prob):
         un = tf.random_uniform(shape, maxval=1.)
-        return tf.to_float(un < one_prob)
+        return tf.to_float(un < one_prob, name='random_modifier')
 
     def _decide_force_or_sample(self,
                                 inp,
                                 predictions,
                                 in_s_flags):
-        answer = tf.reduce_max(predictions, axis=1, keep_dims=True)
-        answer = tf.to_float(tf.equal(predictions, answer))
-        current_batch_size = answer.get_shape().as_list()[0]
-        speaker_flags = tf.constant(np.zeros([current_batch_size, self._flag_size], dtype=np.float32))
-        answer = tf.concat([answer, speaker_flags], 1)
-        delimiter_vec = char2vec('\n',
-                                 self._character_positions_in_vocabulary,
-                                 0,
-                                 2)
-        inp_to_comp = tf.slice(inp, [0, 0], [current_batch_size, self._vocabulary_size])
-        [delim_to_comp, _] = np.split(delimiter_vec, [self._vocabulary_size], axis=1)
-        input_is_not_delimiter = tf.not_equal(tf.reduce_sum(inp_to_comp * delim_to_comp, axis=1, keep_dims=True), 1.)
-        random_modifier = self._generate_random(in_s_flags.get_shape().as_list(), self.sampling_prob)
-        in_s_flags = in_s_flags * random_modifier
-        in_s_flags = tf.cast(in_s_flags, tf.bool)
-        mask = tf.to_float(tf.logical_and(in_s_flags, input_is_not_delimiter))
-        return mask * answer + (1. - mask) * inp
+        with tf.name_scope('force_or_sample'):
+            answer = tf.reduce_max(predictions, axis=1, keep_dims=True)
+            answer = tf.to_float(tf.equal(predictions, answer))
+            current_batch_size = answer.get_shape().as_list()[0]
+            speaker_flags = tf.slice(inp, [0, self._vocabulary_size], [current_batch_size, 2], name='sliced_flags')
+            answer = tf.concat([answer, speaker_flags], 1, name='sampled_answer')
+            delimiter_vec = char2vec('\n',
+                                     self._character_positions_in_vocabulary,
+                                     0,
+                                     2)
+            inp_to_comp = tf.slice(inp, [0, 0], [current_batch_size, self._vocabulary_size])
+            [delim_to_comp, _] = np.split(delimiter_vec, [self._vocabulary_size], axis=1)
+            input_is_not_delimiter = tf.not_equal(tf.reduce_sum(inp_to_comp * delim_to_comp, axis=1, keep_dims=True), 1.)
+            random_modifier = self._generate_random(in_s_flags.get_shape().as_list(), self.sampling_prob)
+            in_s_flags = tf.multiply(in_s_flags, random_modifier, name='in_s_flags_after_modification')
+            in_s_flags = tf.cast(in_s_flags, tf.bool)
+            mask = tf.to_float(tf.logical_and(in_s_flags, input_is_not_delimiter), name='mask')
+            return tf.add(mask * answer, (1. - mask) * inp, name='inp_after_choosing')
 
     def _iter(self, inp, all_states, last_predictions, in_s_flags, iter_idx):
         with tf.name_scope('iter_%s' % iter_idx):
@@ -354,6 +360,7 @@ class Lstm(Model):
         tower_grads = list()
         preds = list()
         losses = list()
+        num_active = list()
         for gpu_batch_size, gpu_name, device_inputs, device_labels, dev_in_s_flags, dev_out_s_flags in zip(
                 self._batch_sizes_on_gpus, self._gpu_names, self._inputs_by_device,
                 self._labels_by_device, self._in_s_flags_by_device, self._out_s_flags_by_device):
@@ -399,12 +406,21 @@ class Lstm(Model):
                             all_matrices.extend(self._output_matrices)
                             l2_loss = self._l2_loss(all_matrices)
                             random_modifier = self._generate_random(dev_out_s_flags.get_shape().as_list(),
-                                                                    self.loss_comp_prob)
-                            dev_out_s_flags = 1. - (1. - dev_out_s_flags) * random_modifier
+                                                                    (1. - self.loss_comp_prob))
+                            dev_out_s_flags = tf.subtract(1.,
+                                                          (1. - dev_out_s_flags) * random_modifier,
+                                                          name='final_dev_out_s_flags')
+
                             number_of_considered_losses = tf.reduce_sum(dev_out_s_flags)
+                            # ce = tf.reduce_mean(
+                            #     tf.nn.softmax_cross_entropy_with_logits(labels=device_labels, logits=logits))
+                            # loss = tf.reduce_sum(ce * dev_out_s_flags) / (number_of_considered_losses + 1e-12)
+                            # losses.append(loss)
+
+                            num_active.append(number_of_considered_losses)
                             ce = tf.reduce_mean(
                                 tf.nn.softmax_cross_entropy_with_logits(labels=device_labels, logits=logits))
-                            loss = tf.reduce_sum(ce * dev_out_s_flags) / (number_of_considered_losses + 1e-12)
+                            loss = tf.reduce_sum(ce * dev_out_s_flags)
                             losses.append(loss)
 
                             # optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
@@ -418,7 +434,9 @@ class Lstm(Model):
 
         with tf.device('/cpu:0'):
             with tf.name_scope(device_name_scope('/cpu:0') + '_gradients'):
-                grads_and_vars = average_gradients(tower_grads)
+                # grads_and_vars = average_gradients(tower_grads)
+                grads_and_vars = average_gradients_not_balanced(tower_grads, num_active)
+
                 grads, v = zip(*grads_and_vars)
                 grads, _ = tf.clip_by_global_norm(grads, 1.)
                 optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
@@ -436,9 +454,12 @@ class Lstm(Model):
                 self._hooks['predictions'] = self.predictions
 
                 # print('self.predictions.get_shape().as_list():', self.predictions.get_shape().as_list())
-                l = 0
-                for loss, gpu_batch_size in zip(losses, self._batch_sizes_on_gpus):
-                    l += float(gpu_batch_size) / float(self._batch_size) * loss
+                # l = 0
+                # for loss, gpu_batch_size in zip(losses, self._batch_sizes_on_gpus):
+                #     l += float(gpu_batch_size) / float(self._batch_size) * loss
+
+                l = sum(losses)
+                l /= (sum(num_active) + 1e-12)
                 self.loss = l
                 self._hooks['loss'] = self.loss
 
@@ -452,7 +473,8 @@ class Lstm(Model):
 
                 sample_input, in_s_flag = tf.split(self.sample_input,
                                                    [self._vocabulary_size + 2, 1],
-                                                   axis=2)
+                                                   axis=2,
+                                                   name='sample_input_and_in_s_flag')
                 sample_input = tf.reshape(sample_input, [1, -1])
                 in_s_flag = tf.reshape(in_s_flag, [1, 1])
                 saved_sample_state = list()
@@ -574,26 +596,32 @@ class Lstm(Model):
 
             inputs = tf.split(inputs, self._batch_sizes_on_gpus, 1)
             self._inputs_by_device = list()
-            for device_inputs in inputs:
-                self._inputs_by_device.append(tf.unstack(device_inputs))
+            for dev_idx, device_inputs in enumerate(inputs):
+                self._inputs_by_device.append(tf.unstack(device_inputs, name='inp_on_dev_%s' % dev_idx))
 
             in_s_flags = tf.split(in_s_flags, self._batch_sizes_on_gpus, 1)
             self._in_s_flags_by_device = list()
-            for device_in_s_flags in in_s_flags:
-                self._in_s_flags_by_device.append(tf.unstack(device_in_s_flags))
+            for dev_idx, device_in_s_flags in enumerate(in_s_flags):
+                self._in_s_flags_by_device.append(tf.unstack(device_in_s_flags, name='in_s_flags_on_dev_%s' % dev_idx))
 
             labels = tf.reshape(labels, shape=(self._num_unrollings, self._batch_size, self._vocabulary_size))
             labels = tf.split(labels, self._batch_sizes_on_gpus, 1)
             self._labels_by_device = list()
-            for device_labels in labels:
-                self._labels_by_device.append(tf.reshape(device_labels, [-1, self._vocabulary_size]))
+            for dev_idx, device_labels in enumerate(labels):
+                self._labels_by_device.append(
+                    tf.reshape(device_labels,
+                               [-1, self._vocabulary_size],
+                               name='labels_on_dev_%s' % dev_idx))
 
             out_s_flags = tf.reshape(out_s_flags,
                                      shape=(self._num_unrollings, self._batch_size, 1))
             out_s_flags = tf.split(out_s_flags, self._batch_sizes_on_gpus, 1)
             self._out_s_flags_by_device = list()
-            for device_out_s_flags in out_s_flags:
-                self._out_s_flags_by_device.append(tf.reshape(device_out_s_flags, [-1, 1]))
+            for dev_idx, device_out_s_flags in enumerate(out_s_flags):
+                self._out_s_flags_by_device.append(
+                    tf.reshape(device_out_s_flags,
+                               [-1, 1],
+                               name='out_s_on_dev_%s' % dev_idx))
 
             self.learning_rate = tf.placeholder(tf.float32, name='learning_rate')
             self._hooks['learning_rate'] = self.learning_rate
@@ -639,7 +667,6 @@ class Lstm(Model):
             self._validation_graph()
         if regime == 'inference':
             self._validation_graph()
-
 
     def get_default_hooks(self):
         return dict(self._hooks.items())

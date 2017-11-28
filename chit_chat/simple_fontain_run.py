@@ -1,10 +1,16 @@
 import tensorflow as tf
+import re
 from environment import Environment
 from simple_fontain import SimpleFontain, SimpleFontainBatcher
-from some_useful_functions import load_vocabulary_from_file, get_positions_in_vocabulary
+from some_useful_functions import load_vocabulary_from_file, get_positions_in_vocabulary, create_vocabulary
 
-f = open('datasets/small_flagged_subs.txt', 'r', encoding='utf-8')
+f = open('datasets/scipop_v2.0/scipop_train.txt', 'r', encoding='utf-8')
 text = f.read()
+print('text:', text[:5000])
+text = re.sub('<([0-9])в>', r'<\1>', text)
+text = re.sub('<[^0>]+>', '<1>', text)
+
+print('text:', text[:5000])
 f.close()
 
 # different
@@ -17,12 +23,12 @@ valid_text = text[-offset:-offset + valid_size]
 train_text = text[:-offset]
 train_size = len(train_text)
 
-vocabulary = load_vocabulary_from_file('datasets/subs_vocabulary.txt')
-
+# vocabulary = load_vocabulary_from_file('datasets/subs_vocabulary.txt')
+vocabulary = create_vocabulary(text)
 cpiv = get_positions_in_vocabulary(vocabulary)
 
 vocabulary_size = len(vocabulary)
-#print(vocabulary_size)
+print(vocabulary_size)
 
 env = Environment(SimpleFontain, SimpleFontainBatcher)
 # env.build(batch_size=64,
