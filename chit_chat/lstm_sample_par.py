@@ -22,22 +22,32 @@ def char2vec(char, character_positions_in_vocabulary, speaker_idx, speaker_flag_
 
 
 def process_input_text(text):
-    #print('text:', text)
-    splitted = text.split('<')
+    # print('(process_input_text)len(text):', len(text))
+    raw_splitted = text.split('<')
+    splitted = list()
+    for chunk in raw_splitted:
+        if len(chunk) > 0:
+            splitted.append(chunk)
+    # print('(process_input_text)len(\'\'.join(splitted)):', len(''.join(splitted)))
     new_text = ''
     bot_speaks_flags = list()
     speaker_flags = list()
     flag = 0
-    for chunk in splitted:
-        match = re.match("[0-9]+>", chunk)
-        if match is not None:
-            span = match.span()
-            string = chunk[span[1]:]
+    for chunk_idx, chunk in enumerate(splitted):
+        match = re.match("[0-9]+в?>", chunk)
+        if match is not None or chunk_idx == 0:
+            if match is not None:
+                span = match.span()
+                string = chunk[span[1]:]
+            else:
+                # print('chunk_idx == 0, chunk =', chunk)
+                string = chunk
             new_text += string
             length = len(string)
             bot_speaks_flags.extend([flag]*length)
             speaker_flags.extend([flag]*length)
             flag = (flag + 1) % 2
+
     return [new_text, speaker_flags, bot_speaks_flags]
 
 
@@ -73,11 +83,13 @@ class LstmBatchGenerator(object):
         return vec2char(vec, vocabulary)
 
     def __init__(self, text, batch_size, num_unrollings=1, vocabulary=None):
+
         tmp_output = process_input_text(text)
         [self._text, self._speaker_flags, self._bot_speaks_flags] = tmp_output
         # print('self._speaker_flags:', self._speaker_flags[:5000])
         # print('self._bot_speaks_flags:', self._bot_speaks_flags[:5000])
         # print('self._text:', self._text[:5000])
+        # print('(__init__)len(self._text):', len(self._text))
         # print('len(self._bot_speaks_flags):', len(self._bot_speaks_flags))
         # print('sum(self._bot_speaks_flags):', sum(self._bot_speaks_flags))
         self._text_size = len(self._text)
@@ -118,7 +130,17 @@ class LstmBatchGenerator(object):
         bot_speaks_flags = np.zeros(shape=(self._batch_size, 1), dtype=np.float32)
         speaker_flags = np.zeros(shape=(self._batch_size, self._number_of_speakers), dtype=np.float32)
         for b in range(self._batch_size):
-            base[b, char2id(self._text[self._cursor[b]], self._character_positions_in_vocabulary)] = 1.0
+            try:
+                pos = self._cursor[b]
+                chr = self._text[pos]
+                chr_id = char2id(chr, self._character_positions_in_vocabulary)
+                base[b, chr_id] = 1.0
+            except IndexError:
+                # print('(_next_batch)self._cursor:', self._cursor)
+                # print('(_next_batch)b:', b)
+                # print('(_next_batch)self._text:', self._text)
+                # print('(_next_batch)pos:', pos)
+                raise
             speaker_flags[b, self._speaker_flags[self._cursor[b]]] = 1.0
             bot_speaks_flags[b, 0] = float(self._bot_speaks_flags[self._cursor[b]])
             self._cursor[b] = (self._cursor[b] + 1) % self._text_size
@@ -146,7 +168,22 @@ class LstmBatchGenerator(object):
             inputs.append(tmp_inputs)
             labels.append(tmp_labels)
         self._last_inputs = inputs[-1]
-        return np.stack(inputs[:-1]), np.concatenate(labels, 0)
+        inputs = np.stack(inputs[:-1])
+        labels = np.concatenate(labels, 0)
+        _, bot_speaks_flags_in_inputs = np.split(inputs, [self._vocabulary_size + 2], axis=2)
+        _, bot_speaks_flags_in_labels = np.split(labels, [self._vocabulary_size], axis=1)
+        if len(self._text) < 1000:
+            type = 'validation'
+        else:
+            type = 'train'
+        # print('(%s)(LstmBatchGenerator.next)bot_speaks_flags_in_inputs:' % type, bot_speaks_flags_in_inputs)
+        # print('(%s)(LstmBatchGenerator.next)bot_speaks_flags_in_labels:' % type, bot_speaks_flags_in_labels)
+        # sum = np.sum(bot_speaks_flags_in_inputs)
+        # print('(%s)(LstmBatchGenerator.next)number of ones:' % type, np.sum(bot_speaks_flags_in_inputs))
+        # print('(%s)(LstmBatchGenerator.next)number of zeros:' % type, bot_speaks_flags_in_labels.shape[0] - sum)
+        one_chunk_in, _ = np.split(bot_speaks_flags_in_inputs, [1], axis=1)
+        one_chunk_out, _ = np.split(bot_speaks_flags_in_labels, [])
+        return inputs, labels
 
 
 def characters(probabilities, vocabulary):
@@ -458,8 +495,9 @@ class Lstm(Model):
                 # for loss, gpu_batch_size in zip(losses, self._batch_sizes_on_gpus):
                 #     l += float(gpu_batch_size) / float(self._batch_size) * loss
 
-                l = sum(losses)
-                l /= (sum(num_active) + 1e-12)
+                l = tf.identity(sum(losses), name='sum_of_all_losses')
+                num_active = tf.identity(sum(num_active), name='number_of_computed_losses')
+                l /= (num_active + 1e-12)
                 self.loss = l
                 self._hooks['loss'] = self.loss
 
@@ -592,7 +630,7 @@ class Lstm(Model):
                                           [self._vocabulary_size + 2, 1],
                                           axis=2)
 
-            labels, out_s_flags = tf.split(self.labels, [self._vocabulary_size, 1], axis=-1)
+            labels, out_s_flags = tf.split(self.labels, [self._vocabulary_size, 1], axis=1)
 
             inputs = tf.split(inputs, self._batch_sizes_on_gpus, 1)
             self._inputs_by_device = list()

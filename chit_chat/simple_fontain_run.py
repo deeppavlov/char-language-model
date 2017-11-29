@@ -4,13 +4,13 @@ from environment import Environment
 from simple_fontain import SimpleFontain, SimpleFontainBatcher
 from some_useful_functions import load_vocabulary_from_file, get_positions_in_vocabulary, create_vocabulary
 
-f = open('datasets/scipop_v2.0/scipop_train.txt', 'r', encoding='utf-8')
+f = open('datasets/scipop_v3.0/scipop_train.txt', 'r', encoding='utf-8')
 text = f.read()
 print('text:', text[:5000])
 text = re.sub('<([0-9])в>', r'<\1>', text)
 text = re.sub('<[^0>]+>', '<1>', text)
 
-print('text:', text[:5000])
+# print('text:', text[:5000])
 f.close()
 
 # different
@@ -28,7 +28,7 @@ vocabulary = create_vocabulary(text)
 cpiv = get_positions_in_vocabulary(vocabulary)
 
 vocabulary_size = len(vocabulary)
-print(vocabulary_size)
+print('(__main__)vocabulary_size:', vocabulary_size)
 
 env = Environment(SimpleFontain, SimpleFontainBatcher)
 # env.build(batch_size=64,
@@ -224,7 +224,7 @@ env.grid_search(evaluation,
                      num_unrollings=21,
                      train_dataset_text=train_text,
                      validation_dataset_texts=[valid_text],
-                     results_collect_interval=100,
+                     results_collect_interval=10,
                      no_validation=False,
                      additional_feed_dict=None)
 
