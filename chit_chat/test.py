@@ -1,7 +1,7 @@
 import tensorflow as tf
 from environment import Environment
 from lstm_sample_par import Lstm, LstmBatchGenerator
-from some_useful_functions import create_vocabulary, get_positions_in_vocabulary
+from some_useful_functions import create_vocabulary, get_positions_in_vocabulary, construct
 
 f = open('datasets/scipop_v3.0/scipop_train.txt', 'r', encoding='utf-8')
 text = f.read()
@@ -78,10 +78,15 @@ def all_non_zero(**kwargs):
 
 
 def in_and_out_f_comp(**kwargs):
+    kwargs = dict(kwargs.items())
     out_fs = kwargs['out']
+    del kwargs['out']
+    del kwargs['special_args']
     in_fs = list()
-    for k, v in sorted(kwargs.items(), key=lambda item: item[0]):
+    for k, v in sorted(kwargs.items(), key=lambda item: int(item[0][3:])):
+        # print('building in_fs:')
         if 'in' in k:
+            print(k)
             in_fs.append(v)
     out_shape = out_fs.get_shape().as_list()
     num_unrollings = len(in_fs)
@@ -146,14 +151,15 @@ env.train(save_path='debugging_environment/first',
           result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
           printed_result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
           # validation_tensor_schedule=valid_tensors,
-          train_tensor_schedule=train_tensors,
+          # train_tensor_schedule=train_tensors,
           stop=5000,
           # train_dataset_text='abx',
           # validation_datasets_texts=['abc'],
           train_dataset_text=train_text,
           validation_dataset_texts=[valid_text],
           # validation_dataset=[valid_text],
-          results_collect_interval=100)
+          results_collect_interval=100,
+          no_validation=False)
 
 connection_interval = 8
 connection_visibility = 5

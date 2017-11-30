@@ -182,7 +182,12 @@ class LstmBatchGenerator(object):
         # print('(%s)(LstmBatchGenerator.next)number of ones:' % type, np.sum(bot_speaks_flags_in_inputs))
         # print('(%s)(LstmBatchGenerator.next)number of zeros:' % type, bot_speaks_flags_in_labels.shape[0] - sum)
         one_chunk_in, _ = np.split(bot_speaks_flags_in_inputs, [1], axis=1)
-        one_chunk_out, _ = np.split(bot_speaks_flags_in_labels, [])
+        one_chunk_in = np.reshape(one_chunk_in, [-1])
+        bot_speaks_flags_in_labels = np.reshape(bot_speaks_flags_in_labels, (self._num_unrollings, self._batch_size, 1))
+        one_chunk_out, _ = np.split(bot_speaks_flags_in_labels, [1], axis=1)
+        one_chunk_out = np.reshape(one_chunk_out, [-1])
+        one_chunk_flags = np.stack((one_chunk_in, one_chunk_out), axis=1)
+        # print('(next) one_chunk_flags:', one_chunk_flags)
         return inputs, labels
 
 
@@ -364,7 +369,7 @@ class Lstm(Model):
 
     def _compute_lstm_matrix_parameters(self, idx):
         if idx == 0:
-            print(self._num_nodes)
+            # print(self._num_nodes)
             input_dim = self._num_nodes[0] + self._embedding_size
         else:
             input_dim = self._num_nodes[idx-1] + self._num_nodes[idx]
@@ -620,6 +625,8 @@ class Lstm(Model):
             self.labels = tf.placeholder(tf.float32,
                                          shape=[self._num_unrollings * self._batch_size, self._vocabulary_size + 1])
 
+
+            #in_flags
             self._hooks['dropout'] = self.dropout_keep_prob
             self._hooks['sampling_prob'] = self.sampling_prob
             self._hooks['loss_comp_prob'] = self.loss_comp_prob
