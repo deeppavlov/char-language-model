@@ -1,5 +1,6 @@
 import tensorflow as tf
 from environment import Environment
+from gru_par import Gru, BatchGenerator
 from lstm_sample_par import Lstm, LstmBatchGenerator
 from some_useful_functions import create_vocabulary, get_positions_in_vocabulary, construct
 
@@ -20,16 +21,11 @@ train_size = len(train_text)
 vocabulary = create_vocabulary(text)
 vocabulary_size = len(vocabulary)
 
+"""lstm"""
 env = Environment(Lstm, LstmBatchGenerator, vocabulary=vocabulary)
 
 cpiv = get_positions_in_vocabulary(vocabulary)
 
-
-add_feed = [{'placeholder': 'dropout', 'value': 0.9},
-            {'placeholder': 'sampling_prob', 'value': {'type': 'linear', 'start': 1., 'end': 1., 'interval': 3000}},
-            {'placeholder': 'loss_comp_prob', 'value': {'type': 'linear', 'start': 0., 'end': 0., 'interval': 3000}}]
-valid_add_feed = [# {'placeholder': 'sampling_prob', 'value': 1.},
-                  {'placeholder': 'dropout', 'value': 1.}]
 
 # tensor_names = [('mask', 'validation/iter_0/force_or_sample/random_modifier:0')]
 # tensor_names = [('mask', 'validation/sample_input:0')]
@@ -126,6 +122,52 @@ def in_and_out(hook_name, number):
 # train_tensors['train_print_tensors'].update(all_nz('out_s_on_dev_0:%s', 'nz_out_flags', 1))
 train_tensors['train_print_tensors'].update(in_and_out('in_and_out_flags', 20))
 
+"""lstm sample"""
+# add_feed = [{'placeholder': 'dropout', 'value': 0.9},
+#             {'placeholder': 'sampling_prob', 'value': {'type': 'linear', 'start': 1., 'end': 1., 'interval': 3000}},
+#             {'placeholder': 'loss_comp_prob', 'value': {'type': 'linear', 'start': 0., 'end': 0., 'interval': 3000}}]
+# valid_add_feed = [# {'placeholder': 'sampling_prob', 'value': 1.},
+#                   {'placeholder': 'dropout', 'value': 1.}]
+# env.build(batch_size=64,
+#           num_layers=2,
+#           num_nodes=[300, 300],
+#           num_output_layers=2,
+#           num_output_nodes=[124],
+#           vocabulary_size=vocabulary_size,
+#           embedding_size=128,
+#           num_unrollings=20,
+#           character_positions_in_vocabulary=cpiv)
+#
+# env.add_hooks(tensor_names=tensor_names)
+# env.train(save_path='debugging_lstm_sample/first',
+#           learning_rate={'type': 'exponential_decay',
+#                          'init': .002,
+#                          'decay': .9,
+#                          'period': 500},
+#           additions_to_feed_dict=add_feed,
+#           validation_additions_to_feed_dict=valid_add_feed,
+#           batch_size=64,
+#           num_unrollings=20,
+#           vocabulary=vocabulary,
+#           checkpoint_steps=[100],
+#           result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
+#           printed_result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
+#           # validation_tensor_schedule=valid_tensors,
+#           # train_tensor_schedule=train_tensors,
+#           stop=5000,
+#           # train_dataset_text='abx',
+#           # validation_datasets_texts=['abc'],
+#           train_dataset_text=train_text,
+#           validation_dataset_texts=[valid_text],
+#           # validation_dataset=[valid_text],
+#           results_collect_interval=100,
+#           no_validation=False)
+
+"""lstm and gru"""
+env = Environment(Gru, BatchGenerator, vocabulary=vocabulary)
+add_feed = [{'placeholder': 'dropout', 'value': 0.9}]
+valid_add_feed = [{'placeholder': 'dropout', 'value': 1.}]
+
 env.build(batch_size=64,
           num_layers=2,
           num_nodes=[300, 300],
@@ -133,11 +175,10 @@ env.build(batch_size=64,
           num_output_nodes=[124],
           vocabulary_size=vocabulary_size,
           embedding_size=128,
-          num_unrollings=20,
-          character_positions_in_vocabulary=cpiv)
+          num_unrollings=20)
 
-env.add_hooks(tensor_names=tensor_names)
-env.train(save_path='debugging_environment/first',
+# env.add_hooks(tensor_names=tensor_names)
+env.train(save_path='debugging_lstm_and_gru/first',
           learning_rate={'type': 'exponential_decay',
                          'init': .002,
                          'decay': .9,
