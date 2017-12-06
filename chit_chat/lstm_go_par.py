@@ -20,11 +20,11 @@ class LstmBatchGenerator(object):
         return create_vocabulary(text)
 
     @staticmethod
-    def char2vec(char, characters_positions_in_vocabulary):
+    def char2vec(char, characters_positions_in_vocabulary, speaker_idx, speaker_flag_size):
         return np.reshape(char2vec(char, characters_positions_in_vocabulary), (1, 1, -1))
 
     @staticmethod
-    def pred2vec(pred):
+    def pred2vec(pred, speaker_idx, speaker_flag_size):
         return np.reshape(pred2vec(pred), (1, 1, -1))
 
     @staticmethod
