@@ -120,82 +120,102 @@ class Controller(object):
 
 
 def perplexity_tensor(**kwargs):
-    probabilities = kwargs['probabilities']
-    labels = kwargs['labels']
-    special_args = kwargs['special_args']
-    if 'dialog_switch' in special_args:
-        if special_args['dialog_switch']:
-            probabilities_shape = probabilities.get_shape().as_list()
-            length = probabilities_shape[1]
-            _, switch = tf.split(labels, [length, 1], axis=1)
-            switch = tf.reshape(switch, [-1])
-    ln2 = np.log(2)
-    shape = probabilities.get_shape().as_list()
-    probabilities = tf.where(probabilities > 1e-10, probabilities, np.full(tuple(shape), 1e-10))
-    log_probabilities = tf.log(probabilities) / ln2
-    entropy = tf.reduce_sum(- probabilities * log_probabilities, axis=1)
-    perplexity = tf.exp(ln2 * entropy)
-    if 'dialog_switch' in special_args:
-        if special_args['dialog_switch']:
-            perplexity = perplexity * switch
-            num_of_sensible_results = tf.reduce_sum(switch)
-            there_is_sensible = tf.not_equal(num_of_sensible_results, 0.)
-            mean_perplexity = tf.divide(tf.reduce_sum(perplexity, name='sum_perplexity'),
-                                        (num_of_sensible_results + 1e-12),
-                                        name='mean_perplexity')
-            return tf.where(there_is_sensible, mean_perplexity, -1.)
-    return tf.reduce_mean(perplexity, name="mean_perplexity")
+    with tf.name_scope('computing_perplexity'):
+        probabilities = kwargs['probabilities']
+        labels = kwargs['labels']
+        special_args = kwargs['special_args']
+        if 'dialog_switch' in special_args:
+            if special_args['dialog_switch']:
+                probabilities_shape = probabilities.get_shape().as_list()
+                length = probabilities_shape[1]
+                _, switch = tf.split(labels, [length, 1], axis=1, name='switch_vector')
+                switch = tf.reshape(switch, [-1], name='switch_reshaped')
+        ln2 = np.log(2, dtype=np.float32)
+        shape = probabilities.get_shape().as_list()
+        probabilities = tf.where(probabilities > 1e-10,
+                                 probabilities,
+                                 np.full(tuple(shape), 1e-10),
+                                 name='to_small_values_in_probs_are_filtered')
+        log_probabilities = tf.divide(tf.log(probabilities), ln2, name='log2_probs')
+        entropy = tf.reduce_sum(- probabilities * log_probabilities, axis=1, name='entropy_not_mean')
+        perplexity = tf.exp(ln2 * entropy, name='perplexity_not_aver')
+        if 'dialog_switch' in special_args:
+            if special_args['dialog_switch']:
+                perplexity = tf.multiply(perplexity, switch, name='relevant_perplexity')
+                num_of_sensible_results = tf.reduce_sum(switch, name='num_of_sensible_results')
+                there_is_sensible = tf.not_equal(num_of_sensible_results, 0., name='there_is_sensible')
+                mean_perplexity = tf.divide(tf.reduce_sum(perplexity, name='sum_perplexity'),
+                                            (num_of_sensible_results + 1e-12),
+                                            name='mean_perplexity')
+                return tf.where(there_is_sensible, mean_perplexity, -1., name='perplexity')
+        return tf.reduce_mean(perplexity, name="perplexity")
 
 
 def loss_tensor(**kwargs):
-    predictions = kwargs['predictions']
-    labels = kwargs['labels']
-    special_args = kwargs['special_args']
-    if 'dialog_switch' in special_args:
-        if special_args['dialog_switch']:
-            predictions_shape = predictions.get_shape().as_list()
-            length = predictions_shape[1]
-            labels, switch = tf.split(labels, [length, 1], axis=1)
-            switch = tf.reshape(switch, [-1])
-    shape = predictions.get_shape().as_list()
-    predictions = tf.where(predictions > 1e-10, predictions, np.full(tuple(shape), 1e-10))
-    log_predictions = tf.log(predictions)
-    loss_on_characters = tf.reduce_sum(-labels * log_predictions, axis=1)
-    if 'dialog_switch' in special_args:
-        if special_args['dialog_switch']:
-            loss_on_characters = loss_on_characters * switch
-            num_of_sensible_results = tf.reduce_sum(switch)
-            there_is_sensible = tf.not_equal(num_of_sensible_results, 0.)
-            mean_loss = tf.reduce_sum(loss_on_characters, name='mean_perplexity') / (num_of_sensible_results + 1e-12)
-            return tf.where(there_is_sensible, mean_loss, -1.)
-    return tf.reduce_mean(loss_on_characters)
+    with tf.name_scope('computing_loss'):
+        predictions = kwargs['predictions']
+        labels = kwargs['labels']
+        special_args = kwargs['special_args']
+        if 'dialog_switch' in special_args:
+            if special_args['dialog_switch']:
+                predictions_shape = predictions.get_shape().as_list()
+                length = predictions_shape[1]
+                labels, switch = tf.split(labels, [length, 1], axis=1, name='labels_and_switch')
+                switch = tf.reshape(switch, [-1], name='switch_reshaped')
+        shape = predictions.get_shape().as_list()
+        predictions = tf.where(predictions > 1e-10,
+                               predictions,
+                               np.full(tuple(shape), 1e-10),
+                               name='to_small_values_in_probs_are_filtered')
+        log_predictions = tf.log(predictions, name='log_pred')
+        loss_on_characters = tf.reduce_sum(-labels * log_predictions, axis=1, name='loss_not_mean')
+        if 'dialog_switch' in special_args:
+            if special_args['dialog_switch']:
+                loss_on_characters = tf.multiply(loss_on_characters, switch, name='relevant_loss')
+                num_of_sensible_results = tf.reduce_sum(switch, name='num_of_sensible_results')
+                there_is_sensible = tf.not_equal(num_of_sensible_results, 0., name='there_is_sensible')
+                mean_loss = tf.divide(tf.reduce_sum(loss_on_characters, name='loss_sum'),
+                                      (num_of_sensible_results + 1e-12),
+                                      name='mean_loss')
+                return tf.where(there_is_sensible, mean_loss, -1., name='loss')
+        return tf.reduce_mean(loss_on_characters, name='loss')
 
 
 def bpc_tensor(**kwargs):
-    return kwargs['loss'] / np.log(2)
+    with tf.name_scope('computing_bpc'):
+        return kwargs['loss'] / np.log(2)
 
 
 def accuracy_tensor(**kwargs):
-    predictions = kwargs['predictions']
-    labels = kwargs['labels']
-    special_args = kwargs['special_args']
-    if 'dialog_switch' in special_args:
-        if special_args['dialog_switch']:
-            predictions_shape = predictions.get_shape().as_list()
-            length = predictions_shape[1]
-            labels, switch = tf.split(labels, [length, 1], axis=1)
-            switch = tf.reshape(switch, [-1])
-    predictions = tf.argmax(predictions, axis=1)
-    labels = tf.argmax(labels, axis=1)
-    accuracy = tf.to_float(tf.equal(predictions, labels))
-    if 'dialog_switch' in special_args:
-        if special_args['dialog_switch']:
-            accuracy = accuracy * switch
-            num_of_sensible_results = tf.reduce_sum(switch)
-            there_is_sensible = tf.not_equal(num_of_sensible_results, 0.)
-            mean_accuracy = tf.reduce_sum(accuracy, name='mean_perplexity') / (num_of_sensible_results + 1e-12)
-            return tf.where(there_is_sensible, mean_accuracy, -1.)
-    return tf.reduce_mean(accuracy)
+    with tf.name_scope('computing_accuracy'):
+        predictions = kwargs['predictions']
+        labels = kwargs['labels']
+        special_args = kwargs['special_args']
+        if 'dialog_switch' in special_args:
+            if special_args['dialog_switch']:
+                predictions_shape = predictions.get_shape().as_list()
+                length = predictions_shape[1]
+                labels, switch = tf.split(labels,
+                                          [length, 1],
+                                          axis=1,
+                                          name='labels_and_switch')
+                switch = tf.reshape(switch, [-1], name='switch')
+        predictions = tf.argmax(predictions, axis=1, name='predictions')
+        labels = tf.argmax(labels, axis=1, name='labels')
+        accuracy = tf.to_float(tf.equal(predictions, labels), name='accuracy_not_aver')
+        if 'dialog_switch' in special_args:
+            if special_args['dialog_switch']:
+                accuracy = tf.multiply(accuracy, switch, name='accuracy_relevant')
+                num_of_sensible_results = tf.reduce_sum(switch, name='num_of_sensible_results')
+                # num_of_sensible_results = tf.Print(num_of_sensible_results,
+                #                                    [num_of_sensible_results],
+                #                                    message='Number of sensible results in accuracy:')
+                there_is_sensible = tf.not_equal(num_of_sensible_results, 0., name='there_is_sensible')
+                mean_accuracy = tf.divide(tf.reduce_sum(accuracy, name='accuracy_sum'),
+                                          (num_of_sensible_results + 1e-12),
+                                          name='mean_accuracy')
+                return tf.where(there_is_sensible, mean_accuracy, -1., name='accuracy')
+        return tf.reduce_mean(accuracy, name='accuracy')
 
 
 def identity_tensor(**kwargs):

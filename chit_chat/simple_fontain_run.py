@@ -15,7 +15,7 @@ f.close()
 
 # different
 offset = 10002
-valid_size = 10000
+valid_size = 2000
 valid_text = text[-offset:-offset + valid_size]
 # print('valid_text:', valid_text)
 
@@ -220,11 +220,11 @@ env.grid_search(evaluation,
                      printed_result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
                      #printed_result_types=None,
                      vocabulary=vocabulary,
-                     stop=1000,
+                     stop=2000,
                      num_unrollings=21,
                      train_dataset_text=train_text,
                      validation_dataset_texts=[valid_text],
-                     results_collect_interval=10,
+                     results_collect_interval=100,
                      no_validation=False,
                      additional_feed_dict=None)
 

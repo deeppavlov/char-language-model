@@ -290,31 +290,45 @@ class Lstm(Model):
         return hs
 
     def _generate_random(self, shape, one_prob):
-        un = tf.random_uniform(shape, maxval=1.)
-        return tf.to_float(un < one_prob, name='random_modifier')
+        with tf.name_scope('generate_random'):
+            un = tf.random_uniform(shape, maxval=1.)
+            return tf.to_float(un < one_prob, name='random_modifier')
 
     def _decide_force_or_sample(self,
                                 inp,
                                 predictions,
                                 in_s_flags):
         with tf.name_scope('force_or_sample'):
-            answer = tf.reduce_max(predictions, axis=1, keep_dims=True)
-            answer = tf.to_float(tf.equal(predictions, answer))
+            answer = tf.reduce_max(predictions, axis=1, keep_dims=True, name='highest_scores_in_preds')
+            answer = tf.to_float(tf.equal(predictions, answer, name='one_hot_mask_in_preds'), name='labels_of_predictions')
             current_batch_size = answer.get_shape().as_list()[0]
-            speaker_flags = tf.slice(inp, [0, self._vocabulary_size], [current_batch_size, 2], name='sliced_flags')
+            speaker_flags = tf.slice(inp,
+                                     [0, self._vocabulary_size],
+                                     [current_batch_size, 2],
+                                     name='sliced_flags')
             answer = tf.concat([answer, speaker_flags], 1, name='sampled_answer')
             delimiter_vec = char2vec('\n',
                                      self._character_positions_in_vocabulary,
                                      0,
                                      2)
-            inp_to_comp = tf.slice(inp, [0, 0], [current_batch_size, self._vocabulary_size])
+            inp_to_comp = tf.slice(inp,
+                                   [0, 0],
+                                   [current_batch_size, self._vocabulary_size],
+                                   name='input_to_comp_with_delim_vec')
             [delim_to_comp, _] = np.split(delimiter_vec, [self._vocabulary_size], axis=1)
-            input_is_not_delimiter = tf.not_equal(tf.reduce_sum(inp_to_comp * delim_to_comp, axis=1, keep_dims=True), 1.)
+            input_is_not_delimiter = tf.not_equal(
+                tf.reduce_sum(inp_to_comp * delim_to_comp,
+                              axis=1,
+                              keep_dims=True),
+                1.,
+                name='input_is_not_delimiter')
             random_modifier = self._generate_random(in_s_flags.get_shape().as_list(), self.sampling_prob)
             in_s_flags = tf.multiply(in_s_flags, random_modifier, name='in_s_flags_after_modification')
-            in_s_flags = tf.cast(in_s_flags, tf.bool)
-            mask = tf.to_float(tf.logical_and(in_s_flags, input_is_not_delimiter), name='mask')
-            return tf.add(mask * answer, (1. - mask) * inp, name='inp_after_choosing')
+            in_s_flags = tf.cast(in_s_flags, tf.bool, name='in_s_flags_am_bool')
+            mask = tf.to_float(tf.logical_and(in_s_flags, input_is_not_delimiter),
+                               name='mask')
+            return tf.stop_gradient(tf.add(mask * answer, (1. - mask) * inp), name='inp_after_choosing')
+            # return tf.add((1. - mask) * answer, mask * inp, name='inp_after_choosing')
 
     def _iter(self, inp, all_states, last_predictions, in_s_flags, iter_idx):
         with tf.name_scope('iter_%s' % iter_idx):
@@ -403,12 +417,12 @@ class Lstm(Model):
         preds = list()
         losses = list()
         num_active = list()
-        for gpu_batch_size, gpu_name, device_inputs, device_labels, dev_in_s_flags, dev_out_s_flags in zip(
-                self._batch_sizes_on_gpus, self._gpu_names, self._inputs_by_device,
-                self._labels_by_device, self._in_s_flags_by_device, self._out_s_flags_by_device):
-            with tf.device(gpu_name):
-                with tf.name_scope(device_name_scope(gpu_name)):
-                    with tf.name_scope('train'):
+        with tf.name_scope('train'):
+            for gpu_batch_size, gpu_name, device_inputs, device_labels, dev_in_s_flags, dev_out_s_flags in zip(
+                    self._batch_sizes_on_gpus, self._gpu_names, self._inputs_by_device,
+                    self._labels_by_device, self._in_s_flags_by_device, self._out_s_flags_by_device):
+                with tf.device(gpu_name):
+                    with tf.name_scope(device_name_scope(gpu_name)):
                         saved_states = list()
                         for layer_idx, layer_num_nodes in enumerate(self._num_nodes):
                             saved_states.append(
@@ -443,68 +457,76 @@ class Lstm(Model):
                         logits = tf.concat(list_of_logits, 0, name='all_logits')
 
                         with tf.control_dependencies(save_ops):
-                            all_matrices = [self._embedding_matrix]
-                            all_matrices.extend(self._lstm_matrices)
-                            all_matrices.extend(self._output_matrices)
-                            l2_loss = self._l2_loss(all_matrices)
-                            random_modifier = self._generate_random(dev_out_s_flags.get_shape().as_list(),
-                                                                    (1. - self.loss_comp_prob))
-                            dev_out_s_flags = tf.subtract(1.,
-                                                          (1. - dev_out_s_flags) * random_modifier,
-                                                          name='final_dev_out_s_flags')
+                            with tf.name_scope('device_gradient_computation'):
+                                all_matrices = [self._embedding_matrix]
+                                all_matrices.extend(self._lstm_matrices)
+                                all_matrices.extend(self._output_matrices)
+                                l2_loss = self._l2_loss(all_matrices)
+                                random_modifier = self._generate_random(dev_out_s_flags.get_shape().as_list(),
+                                                                        (1. - self.loss_comp_prob))
+                                dev_out_s_flags = tf.stop_gradient(
+                                    tf.subtract(1.,
+                                                (1. - dev_out_s_flags) * random_modifier),
+                                    name='final_dev_out_s_flags')
+                                dev_out_s_flags = tf.reshape(dev_out_s_flags, [-1], name='dev_out_s_flags_reshaped')
+                                number_of_considered_losses = tf.reduce_sum(dev_out_s_flags,
+                                                                            name='number_of_considered_losses')
+                                # ce = tf.reduce_mean(
+                                #     tf.nn.softmax_cross_entropy_with_logits(labels=device_labels, logits=logits))
+                                # loss = tf.reduce_sum(ce * dev_out_s_flags) / (number_of_considered_losses + 1e-12)
+                                # losses.append(loss)
 
-                            number_of_considered_losses = tf.reduce_sum(dev_out_s_flags)
-                            # ce = tf.reduce_mean(
-                            #     tf.nn.softmax_cross_entropy_with_logits(labels=device_labels, logits=logits))
-                            # loss = tf.reduce_sum(ce * dev_out_s_flags) / (number_of_considered_losses + 1e-12)
-                            # losses.append(loss)
+                                num_active.append(number_of_considered_losses)
+                                ce = tf.nn.softmax_cross_entropy_with_logits(
+                                    labels=device_labels,
+                                    logits=logits,
+                                    name='ce_not_filtered')
+                                loss = tf.reduce_sum(ce * dev_out_s_flags, name='loss')
+                                losses.append(loss)
 
-                            num_active.append(number_of_considered_losses)
-                            ce = tf.reduce_mean(
-                                tf.nn.softmax_cross_entropy_with_logits(labels=device_labels, logits=logits))
-                            loss = tf.reduce_sum(ce * dev_out_s_flags)
-                            losses.append(loss)
+                                # optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
+                                optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
+                                grads_and_vars = optimizer.compute_gradients(loss + l2_loss)
+                                tower_grads.append(grads_and_vars)
 
-                            # optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
-                            optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
-                            grads_and_vars = optimizer.compute_gradients(loss + l2_loss)
-                            tower_grads.append(grads_and_vars)
+                                # splitting concatenated results for different characters
+                                concat_pred = tf.nn.softmax(logits)
+                                preds.append(tf.split(concat_pred, self._num_unrollings))
 
-                            # splitting concatenated results for different characters
-                            concat_pred = tf.nn.softmax(logits)
-                            preds.append(tf.split(concat_pred, self._num_unrollings))
+            with tf.device('/cpu:0'):
+                with tf.name_scope(device_name_scope('/cpu:0') + '_gradients'):
+                    # grads_and_vars = average_gradients(tower_grads)
+                    grads_and_vars = average_gradients_not_balanced(tower_grads, num_active)
 
-        with tf.device('/cpu:0'):
-            with tf.name_scope(device_name_scope('/cpu:0') + '_gradients'):
-                # grads_and_vars = average_gradients(tower_grads)
-                grads_and_vars = average_gradients_not_balanced(tower_grads, num_active)
+                    grads, v = zip(*grads_and_vars)
+                    grads, _ = tf.clip_by_global_norm(grads, 1.)
+                    optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
+                    self.train_op = optimizer.apply_gradients(zip(grads, v))
+                    self._hooks['train_op'] = self.train_op
 
-                grads, v = zip(*grads_and_vars)
-                grads, _ = tf.clip_by_global_norm(grads, 1.)
-                optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
-                self.train_op = optimizer.apply_gradients(zip(grads, v))
-                self._hooks['train_op'] = self.train_op
+                    # composing predictions
+                    preds_by_char = list()
+                    # print('preds:', preds)
+                    for char_idx, one_char_preds in enumerate(zip(*preds)):
+                        # print('one_char_preds:', one_char_preds)
+                        preds_by_char.append(
+                            tf.concat(
+                                one_char_preds, 0,
+                                name='one_char_preds_%s' % char_idx))
+                    # print('len(preds_by_char):', len(preds_by_char))
+                    self.predictions = tf.concat(preds_by_char, 0, name='predictions')
+                    self._hooks['predictions'] = self.predictions
 
-                # composing predictions
-                preds_by_char = list()
-                # print('preds:', preds)
-                for one_char_preds in zip(*preds):
-                    # print('one_char_preds:', one_char_preds)
-                    preds_by_char.append(tf.concat(one_char_preds, 0))
-                # print('len(preds_by_char):', len(preds_by_char))
-                self.predictions = tf.concat(preds_by_char, 0)
-                self._hooks['predictions'] = self.predictions
+                    # print('self.predictions.get_shape().as_list():', self.predictions.get_shape().as_list())
+                    # l = 0
+                    # for loss, gpu_batch_size in zip(losses, self._batch_sizes_on_gpus):
+                    #     l += float(gpu_batch_size) / float(self._batch_size) * loss
 
-                # print('self.predictions.get_shape().as_list():', self.predictions.get_shape().as_list())
-                # l = 0
-                # for loss, gpu_batch_size in zip(losses, self._batch_sizes_on_gpus):
-                #     l += float(gpu_batch_size) / float(self._batch_size) * loss
-
-                l = tf.identity(sum(losses), name='sum_of_all_losses')
-                num_active = tf.identity(sum(num_active), name='number_of_computed_losses')
-                l /= (num_active + 1e-12)
-                self.loss = l
-                self._hooks['loss'] = self.loss
+                    l = tf.identity(sum(losses), name='sum_of_all_losses')
+                    num_active = tf.identity(sum(num_active), name='number_of_computed_losses')
+                    # num_active = tf.Print(num_active, [l, num_active], message='loss_sum, num_active:')
+                    self.loss = tf.divide(l, (num_active + 1e-12), name='average_loss')
+                    self._hooks['loss'] = self.loss
 
     def _validation_graph(self):
         with tf.device(self._gpu_names[0]):
