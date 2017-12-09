@@ -51,6 +51,14 @@ def process_input_text(text):
     return [new_text, speaker_flags, bot_speaks_flags]
 
 
+def process_input_text_reg(text):
+    interval = 10
+    new_text = re.sub('<[^>]>', '', text)
+    bot_speaks_flags = [(k // interval) % 2 for k in range(len(new_text))]
+    speaker_flags = bot_speaks_flags
+    return [new_text, speaker_flags, bot_speaks_flags]
+
+
 class LstmBatchGenerator(object):
 
     @staticmethod
@@ -84,7 +92,8 @@ class LstmBatchGenerator(object):
 
     def __init__(self, text, batch_size, num_unrollings=1, vocabulary=None):
 
-        tmp_output = process_input_text(text)
+        tmp_output = process_input_text_reg(text)
+        # tmp_output = process_input_text(text)
         [self._text, self._speaker_flags, self._bot_speaks_flags] = tmp_output
         # print('self._speaker_flags:', self._speaker_flags[:5000])
         # print('self._bot_speaks_flags:', self._bot_speaks_flags[:5000])
@@ -328,7 +337,7 @@ class Lstm(Model):
             mask = tf.to_float(tf.logical_and(in_s_flags, input_is_not_delimiter),
                                name='mask')
             return tf.stop_gradient(tf.add(mask * answer, (1. - mask) * inp), name='inp_after_choosing')
-            # return tf.add((1. - mask) * answer, mask * inp, name='inp_after_choosing')
+            # return tf.stop_gradient(tf.add((1. - mask) * answer, mask * inp), name='inp_after_choosing')
 
     def _iter(self, inp, all_states, last_predictions, in_s_flags, iter_idx):
         with tf.name_scope('iter_%s' % iter_idx):
