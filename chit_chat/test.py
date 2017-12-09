@@ -127,19 +127,19 @@ train_tensors['train_print_tensors'].update(in_and_out('in_and_out_flags', 20))
 """lstm sample"""
 add_feed = [{'placeholder': 'dropout', 'value': 0.9},
             {'placeholder': 'sampling_prob',
-             'value': {'type': 'linear', 'start': 0., 'end': 1., 'interval': 3000}},
+             'value': {'type': 'linear', 'start': 1., 'end': 1., 'interval': 3000}},
             {'placeholder': 'loss_comp_prob',
-             'value': {'type': 'linear', 'start': 1., 'end': 0., 'interval': 3000}}]
+             'value': {'type': 'linear', 'start': 0., 'end': 0., 'interval': 3000}}]
 valid_add_feed = [# {'placeholder': 'sampling_prob', 'value': 1.},
                   {'placeholder': 'dropout', 'value': 1.}]
 env.build(batch_size=64,
-          num_layers=2,
-          num_nodes=[200, 200],
+          num_layers=1,
+          num_nodes=[400],
           num_output_layers=2,
           num_output_nodes=[124],
           vocabulary_size=vocabulary_size,
           embedding_size=128,
-          num_unrollings=200,
+          num_unrollings=30,
           character_positions_in_vocabulary=cpiv)
 
 env.add_hooks(tensor_names=tensor_names)
@@ -147,11 +147,11 @@ env.train(save_path='debugging_lstm_sample/first',
           learning_rate={'type': 'exponential_decay',
                          'init': .002,
                          'decay': .9,
-                         'period': 500},
+                         'period': 2000},
           additions_to_feed_dict=add_feed,
           validation_additions_to_feed_dict=valid_add_feed,
           batch_size=64,
-          num_unrollings=200,
+          num_unrollings=30,
           vocabulary=vocabulary,
           checkpoint_steps=[100],
           result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
@@ -164,7 +164,7 @@ env.train(save_path='debugging_lstm_sample/first',
           train_dataset_text=train_text,
           validation_dataset_texts=[valid_text],
           # validation_dataset=[valid_text],
-          results_collect_interval=100,
+          results_collect_interval=200,
           no_validation=False,
           add_graph_to_summary=True)
 

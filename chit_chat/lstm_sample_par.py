@@ -52,7 +52,7 @@ def process_input_text(text):
 
 
 def process_input_text_reg(text):
-    interval = 10
+    interval = 5
     new_text = re.sub('<[^>]>', '', text)
     bot_speaks_flags = [(k // interval) % 2 for k in range(len(new_text))]
     speaker_flags = bot_speaks_flags
@@ -343,6 +343,22 @@ class Lstm(Model):
         with tf.name_scope('iter_%s' % iter_idx):
             inp = self._decide_force_or_sample(inp, last_predictions, in_s_flags)
             embedding = self._embed(inp)
+            with tf.name_scope('attaching_big_flag'):
+                _, flag = tf.split(inp,
+                                   [self._vocabulary_size, self._flag_size],
+                                   axis=1,
+                                   name='flag')
+                first_speaker = tf.constant([[1., 0.]])
+                comp_res = tf.stop_gradient(
+                    tf.reduce_prod(
+                        tf.to_float(tf.equal(flag, first_speaker)),
+                        axis=1,
+                        keep_dims=True,
+                        name='comp_res'))
+                big_flag = tf.tile((comp_res - .5) * 2., [1, self._big_size], name='big_flag')
+                # with tf.device('/cpu:0'):
+                #     big_flag = tf.Print(big_flag, [big_flag], message='big_flag')
+                embedding = tf.concat([embedding, big_flag], 1, name='flagged_embedding')
             output, all_states = self._rnn_module(embedding, all_states)
             logits = self._output_module(output)
         return [logits, all_states]
@@ -393,7 +409,7 @@ class Lstm(Model):
     def _compute_lstm_matrix_parameters(self, idx):
         if idx == 0:
             # print(self._num_nodes)
-            input_dim = self._num_nodes[0] + self._embedding_size
+            input_dim = self._num_nodes[0] + self._embedding_size + self._big_size
         else:
             input_dim = self._num_nodes[idx-1] + self._num_nodes[idx]
         output_dim = 4 * self._num_nodes[idx]
@@ -509,6 +525,7 @@ class Lstm(Model):
 
                     grads, v = zip(*grads_and_vars)
                     grads, _ = tf.clip_by_global_norm(grads, 1.)
+                    # optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
                     optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
                     self.train_op = optimizer.apply_gradients(zip(grads, v))
                     self._hooks['train_op'] = self.train_op
@@ -638,6 +655,7 @@ class Lstm(Model):
         self._num_unrollings = num_unrollings
         self._init_parameter = init_parameter
         self._regularization_rate = regularization_rate
+        self._big_size = 10
 
         self._gpu_names = get_available_gpus()
         num_available_gpus = len(self._gpu_names)
