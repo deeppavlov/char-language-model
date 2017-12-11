@@ -92,8 +92,8 @@ class LstmBatchGenerator(object):
 
     def __init__(self, text, batch_size, num_unrollings=1, vocabulary=None):
 
-        tmp_output = process_input_text_reg(text)
-        # tmp_output = process_input_text(text)
+        # tmp_output = process_input_text_reg(text)
+        tmp_output = process_input_text(text)
         [self._text, self._speaker_flags, self._bot_speaks_flags] = tmp_output
         # print('self._speaker_flags:', self._speaker_flags[:5000])
         # print('self._bot_speaks_flags:', self._bot_speaks_flags[:5000])
@@ -110,6 +110,7 @@ class LstmBatchGenerator(object):
         self._num_unrollings = num_unrollings
         segment = self._text_size // batch_size
         self._cursor = [offset * segment for offset in range(batch_size)]
+        self._counter = 0 # to swap flags when all train dataset is processed
         self._last_inputs, _ = self._start_batch()
 
     def get_dataset_length(self):
@@ -155,6 +156,7 @@ class LstmBatchGenerator(object):
             self._cursor[b] = (self._cursor[b] + 1) % self._text_size
         inputs = np.concatenate((base, speaker_flags, bot_speaks_flags), 1)
         labels = np.concatenate((base, bot_speaks_flags), 1)
+        self._counter += 1
         return inputs, labels
 
     def char2batch(self, char):
@@ -197,6 +199,15 @@ class LstmBatchGenerator(object):
         one_chunk_out = np.reshape(one_chunk_out, [-1])
         one_chunk_flags = np.stack((one_chunk_in, one_chunk_out), axis=1)
         # print('(next) one_chunk_flags:', one_chunk_flags)
+        if self._counter > self._text_size and self._num_unrollings > 1:
+            self._counter = 0
+            segment = self._text_size // self._batch_size
+            self._cursor = [offset * segment for offset in range(self._batch_size)]
+            new_flags = list()
+            for f in self._speaker_flags:
+                new_flags.append((f + 1) % 2)
+            self._speaker_flags = list(new_flags)
+            self._bot_speaks_flags = self._speaker_flags
         return inputs, labels
 
 
