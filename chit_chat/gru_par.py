@@ -284,7 +284,6 @@ class Gru(Model):
         tower_grads = list()
         preds = list()
         losses = list()
-        num_active = list()
         for gpu_batch_size, gpu_name, device_inputs, device_labels in zip(
                 self._batch_sizes_on_gpus, self._gpu_names, self._inputs_by_device, self._labels_by_device):
             with tf.device(gpu_name):
