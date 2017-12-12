@@ -393,6 +393,7 @@ class Environment(object):
         self._default_train_method_args = dict(
             session_specs={'allow_soft_placement': False,
                            'gpu_memory': None,
+                           'allow_growth': False,
                            'log_device_placement': False,
                            'visible_device_list': ""},
             start_specs={'restore_path': None,
@@ -611,15 +612,20 @@ class Environment(object):
             return self.default_test_method_args
         return None
 
-    def _start_session(self, allow_soft_placement, log_device_placement, gpu_memory, visible_device_list):
+    def _start_session(self, allow_soft_placement, log_device_placement, gpu_memory, allow_growth, visible_device_list):
         """Starts new session with specified parameters. If there is opend session closes it"""
         if self._session is not None:
             print('Warning: there is an opened session already. Closing it')
             self._session.close()
+        print('(_start_session)gpu_memory:', gpu_memory)
+        print('(_start_session)allow_growth:', allow_growth)
         config = tf.ConfigProto(allow_soft_placement=allow_soft_placement,
-                                log_device_placement=log_device_placement,
                                 gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=gpu_memory,
-                                                          visible_device_list=visible_device_list))
+                                                          allow_growth=allow_growth,
+                                                          visible_device_list=visible_device_list),
+                                log_device_placement=log_device_placement
+                                )
+        # config.gpu_options.per_process_gpu_memory_fraction = gpu_memory
         self._session = tf.Session(config=config)
 
     def _close_session(self):
@@ -684,6 +690,7 @@ class Environment(object):
         self._start_session(session_specs['allow_soft_placement'],
                             session_specs['log_device_placement'],
                             session_specs['gpu_memory'],
+                            session_specs['allow_growth'],
                             session_specs['visible_device_list'])
         self._initialize_pupil(start_specs['restore_path'])
         add_feed_dict = dict()
@@ -1190,6 +1197,7 @@ class Environment(object):
             self._start_session(session_specs['allow_soft_placement'],
                                 session_specs['log_device_placement'],
                                 session_specs['gpu_memory'],
+                                session_specs['allow_growth'],
                                 session_specs['visible_device_list'])
         self._train_repeatedly(start_specs, run_specs_set)
         if close_session:
@@ -1243,6 +1251,7 @@ class Environment(object):
         self._start_session(session_specs['allow_soft_placement'],
                             session_specs['log_device_placement'],
                             session_specs['gpu_memory'],
+                            session_specs['allow_growth'],
                             session_specs['visible_device_list'])
         datasets = dict(evaluation['datasets'].items())
         if 'train' in datasets:
@@ -1417,6 +1426,7 @@ class Environment(object):
                   batch_generator_class,
                   additions_to_feed_dict=None,
                   gpu_memory=None,
+                  allow_growth=False,
                   allow_soft_placement=False,
                   log_device_placement=False,
                   visible_device_list='',
@@ -1444,6 +1454,7 @@ class Environment(object):
         self._start_session(allow_soft_placement,
                             log_device_placement,
                             gpu_memory,
+                            allow_growth,
                             visible_device_list)
         if restore_path is None:
             print_and_log('Skipping variables restoring. Continuing on current variables values', fd=fd)

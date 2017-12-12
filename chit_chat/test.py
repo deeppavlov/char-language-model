@@ -1,11 +1,14 @@
+import re
 import tensorflow as tf
 from environment import Environment
 # from gru_par import Gru, BatchGenerator
-from lstm_sample_par import Lstm, LstmBatchGenerator
+# from lstm_sample_par import Lstm, LstmBatchGenerator
+from lstm_par import Lstm, LstmBatchGenerator
 from some_useful_functions import create_vocabulary, get_positions_in_vocabulary, construct
 
 f = open('datasets/scipop_v3.0/scipop_train.txt', 'r', encoding='utf-8')
 text = f.read()
+text = re.sub('<[^>]*>', '', text)
 f.close()
 
 # different
@@ -21,177 +24,140 @@ train_size = len(train_text)
 vocabulary = create_vocabulary(text)
 vocabulary_size = len(vocabulary)
 
-"""lstm"""
-env = Environment(Lstm, LstmBatchGenerator, vocabulary=vocabulary)
-
-cpiv = get_positions_in_vocabulary(vocabulary)
+# """lstm"""
+# env = Environment(Lstm, LstmBatchGenerator, vocabulary=vocabulary)
+#
+# cpiv = get_positions_in_vocabulary(vocabulary)
 
 
 # tensor_names = [('mask', 'validation/iter_0/force_or_sample/random_modifier:0')]
 # tensor_names = [('mask', 'validation/sample_input:0')]
-tensor_names = [('in_s_flag', 'validation/sample_input_and_in_s_flag:1')]
-tensor_names.append(('mask', 'validation/iter_0/force_or_sample/mask:0'))
-tensor_names.append(('answer', 'validation/iter_0/force_or_sample/sampled_answer:0'))
-tensor_names.append(('after_choosing', 'validation/iter_0/force_or_sample/inp_after_choosing:0'))
-tensor_names.append(('final_dev_out_s_flags', 'train/gpu0/device_gradient_computation/final_dev_out_s_flags:0'))
-tensor_names.append(('number_of_computed_losses', 'train/cpu0_gradients/number_of_computed_losses:0'))
-tensor_names.append(('out_s_on_dev_0', 'out_s_on_dev_0:0'))
-for i in range(3):
-    tensor_names.append(('tr_in_s_flag_%s' % i, 'in_s_flags_on_dev_0:%s' % i))
-    tensor_names.append(('tr_mask_%s' % i, 'train/gpu0/iter_%s/force_or_sample/mask:0' % i))
-    tensor_names.append(('tr_answer_%s' % i, 'train/gpu0/iter_%s/force_or_sample/sampled_answer:0' % i))
-    tensor_names.append(('tr_after_choosing_%s' % i, 'train/gpu0/iter_%s/force_or_sample/inp_after_choosing:0' % i))
-    # tensor_names.append(('tr_predictions_%s' % i,
-    #                      'train/gpu0/device_gradient_computation/predictions_%s:0' % i))
-    tensor_names.append(('tr_input_%s' % i,
-                         'inp_on_dev_0:%s' % i))
-
-valid_tensors = {'valid_print_tensors': {'mask': [100 + i for i in range(30)],
-                                         'in_s_flag': [100 + i for i in range(30)],
-                                         'answer': [100 + i for i in range(30)],
-                                         'after_choosing': [100 + i for i in range(30)],
-                                         'sample_input': [100 + i for i in range(30)]}}
-
-train_print = dict()
-train_print['number_of_computed_losses'] = [i for i in range(20)]
-# train_print['out_s_on_dev_0'] = [i for i in range(20)]
-# train_print['final_dev_out_s_flags'] = [i for i in range(20)]
-for idx in range(3):
-    pass
-    # train_print['tr_in_s_flag_%s' % idx] = [i for i in range(20)]
-    # train_print['tr_mask_%s' % idx] = [i for i in range(20)]
-    # train_print['tr_answer_%s' % idx] = [i for i in range(20)]
-    # train_print['tr_after_choosing_%s' % idx] = [i for i in range(20)]
-    # train_print['tr_input_%s' % idx] = [i for i in range(20)]
-    # train_print['tr_predictions_%s' % idx] = [i for i in range(20)]
-train_tensors = {'train_print_tensors': train_print}
-
-
-def all_non_zero(**kwargs):
-    tensors = list()
-    for key, value in kwargs.items():
-        if key != 'special_args':
-            tensors.append(value)
-    return sum([tf.reduce_sum(t) for t in tensors])
-
-
-def in_and_out_f_comp(**kwargs):
-    kwargs = dict(kwargs.items())
-    out_fs = kwargs['out']
-    del kwargs['out']
-    del kwargs['special_args']
-    in_fs = list()
-    for k, v in sorted(kwargs.items(), key=lambda item: int(item[0][3:])):
-        # print('building in_fs:')
-        if 'in' in k:
-            print(k)
-            in_fs.append(v)
-    out_shape = out_fs.get_shape().as_list()
-    num_unrollings = len(in_fs)
-    bsize = out_shape[0] // num_unrollings
-    out_fs = tf.reshape(out_fs, [num_unrollings, bsize, 1])
-    one_chunk_out = tf.reshape(tf.slice(out_fs, [0, 0, 0], [num_unrollings, 1, 1]), [-1])
-    in_all = tf.stack(in_fs)
-    one_chunk_in = tf.reshape(tf.slice(in_all, [0, 0, 0], [num_unrollings, 1, 1]), [-1])
-    return tf.stack([one_chunk_in, one_chunk_out], axis=1)
-
-env.register_build_function(all_non_zero, 'all_nz')
-env.register_build_function(in_and_out_f_comp, 'in_and_out_flags')
-
-
-def all_nz(tmpl, hook_name, number):
-    schedule = dict()
-    env.register_builder('all_nz',
-                         tensor_names=dict([('tensor_%s' % i, tmpl % i) for i in range(number)]),
-                         output_hook_name=hook_name)
-    schedule[hook_name] = [i for i in range(30)]
-    return schedule
-
-
-def in_and_out(hook_name, number):
-    schedule = dict()
-    tensor_names = dict()
-    tensor_names['out'] = 'out_s_on_dev_0:0'
-    for i in range(number):
-        tensor_names['in_%s' % i] = 'in_s_flags_on_dev_0:%s' % i
-    env.register_builder('in_and_out_flags',
-                         tensor_names=tensor_names,
-                         output_hook_name=hook_name)
-    schedule[hook_name] = [i for i in range(30)]
-    return schedule
-
-# train_tensors['train_print_tensors'].update(all_nz('in_s_flags_on_dev_0:%s', 'nz_in_flags', 20))
-# train_tensors['train_print_tensors'].update(all_nz('out_s_on_dev_0:%s', 'nz_out_flags', 1))
-train_tensors['train_print_tensors'].update(in_and_out('in_and_out_flags', 20))
-
-"""lstm sample"""
-add_feed = [{'placeholder': 'dropout', 'value': 0.9},
-            {'placeholder': 'sampling_prob',
-             'value': {'type': 'linear', 'start': 1., 'end': 1., 'interval': 3000}},
-            {'placeholder': 'loss_comp_prob',
-             'value': {'type': 'linear', 'start': 0., 'end': 0., 'interval': 3000}}]
-valid_add_feed = [# {'placeholder': 'sampling_prob', 'value': 1.},
-                  {'placeholder': 'dropout', 'value': 1.}]
-env.build(batch_size=64,
-          num_layers=1,
-          num_nodes=[400],
-          num_output_layers=2,
-          num_output_nodes=[124],
-          vocabulary_size=vocabulary_size,
-          embedding_size=128,
-          num_unrollings=30,
-          character_positions_in_vocabulary=cpiv)
-
-env.add_hooks(tensor_names=tensor_names)
-env.train(save_path='debugging_lstm_sample/first',
-          learning_rate={'type': 'exponential_decay',
-                         'init': .002,
-                         'decay': .9,
-                         'period': 2000},
-          additions_to_feed_dict=add_feed,
-          validation_additions_to_feed_dict=valid_add_feed,
-          batch_size=64,
-          num_unrollings=30,
-          vocabulary=vocabulary,
-          checkpoint_steps=[100],
-          result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
-          printed_result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
-          # validation_tensor_schedule=valid_tensors,
-          # train_tensor_schedule=train_tensors,
-          stop=5000,
-          # train_dataset_text='abx',
-          # validation_datasets_texts=['abc'],
-          train_dataset_text=train_text,
-          validation_dataset_texts=[valid_text],
-          # validation_dataset=[valid_text],
-          results_collect_interval=200,
-          no_validation=False,
-          add_graph_to_summary=True)
-
-"""lstm and gru"""
-# env = Environment(Gru, BatchGenerator, vocabulary=vocabulary)
-# add_feed = [{'placeholder': 'dropout', 'value': 0.9}]
-# valid_add_feed = [{'placeholder': 'dropout', 'value': 1.}]
+# tensor_names = [('in_s_flag', 'validation/sample_input_and_in_s_flag:1')]
+# tensor_names.append(('mask', 'validation/iter_0/force_or_sample/mask:0'))
+# tensor_names.append(('answer', 'validation/iter_0/force_or_sample/sampled_answer:0'))
+# tensor_names.append(('after_choosing', 'validation/iter_0/force_or_sample/inp_after_choosing:0'))
+# tensor_names.append(('final_dev_out_s_flags', 'train/gpu0/device_gradient_computation/final_dev_out_s_flags:0'))
+# tensor_names.append(('number_of_computed_losses', 'train/cpu0_gradients/number_of_computed_losses:0'))
+# tensor_names.append(('out_s_on_dev_0', 'out_s_on_dev_0:0'))
+# for i in range(3):
+#     tensor_names.append(('tr_in_s_flag_%s' % i, 'in_s_flags_on_dev_0:%s' % i))
+#     tensor_names.append(('tr_mask_%s' % i, 'train/gpu0/iter_%s/force_or_sample/mask:0' % i))
+#     tensor_names.append(('tr_answer_%s' % i, 'train/gpu0/iter_%s/force_or_sample/sampled_answer:0' % i))
+#     tensor_names.append(('tr_after_choosing_%s' % i, 'train/gpu0/iter_%s/force_or_sample/inp_after_choosing:0' % i))
+#     # tensor_names.append(('tr_predictions_%s' % i,
+#     #                      'train/gpu0/device_gradient_computation/predictions_%s:0' % i))
+#     tensor_names.append(('tr_input_%s' % i,
+#                          'inp_on_dev_0:%s' % i))
 #
+# valid_tensors = {'valid_print_tensors': {'mask': [100 + i for i in range(30)],
+#                                          'in_s_flag': [100 + i for i in range(30)],
+#                                          'answer': [100 + i for i in range(30)],
+#                                          'after_choosing': [100 + i for i in range(30)],
+#                                          'sample_input': [100 + i for i in range(30)]}}
+#
+# train_print = dict()
+# train_print['number_of_computed_losses'] = [i for i in range(20)]
+# # train_print['out_s_on_dev_0'] = [i for i in range(20)]
+# # train_print['final_dev_out_s_flags'] = [i for i in range(20)]
+# for idx in range(3):
+#     pass
+#     # train_print['tr_in_s_flag_%s' % idx] = [i for i in range(20)]
+#     # train_print['tr_mask_%s' % idx] = [i for i in range(20)]
+#     # train_print['tr_answer_%s' % idx] = [i for i in range(20)]
+#     # train_print['tr_after_choosing_%s' % idx] = [i for i in range(20)]
+#     # train_print['tr_input_%s' % idx] = [i for i in range(20)]
+#     # train_print['tr_predictions_%s' % idx] = [i for i in range(20)]
+# train_tensors = {'train_print_tensors': train_print}
+#
+#
+# def all_non_zero(**kwargs):
+#     tensors = list()
+#     for key, value in kwargs.items():
+#         if key != 'special_args':
+#             tensors.append(value)
+#     return sum([tf.reduce_sum(t) for t in tensors])
+#
+#
+# def in_and_out_f_comp(**kwargs):
+#     kwargs = dict(kwargs.items())
+#     out_fs = kwargs['out']
+#     del kwargs['out']
+#     del kwargs['special_args']
+#     in_fs = list()
+#     for k, v in sorted(kwargs.items(), key=lambda item: int(item[0][3:])):
+#         # print('building in_fs:')
+#         if 'in' in k:
+#             print(k)
+#             in_fs.append(v)
+#     out_shape = out_fs.get_shape().as_list()
+#     num_unrollings = len(in_fs)
+#     bsize = out_shape[0] // num_unrollings
+#     out_fs = tf.reshape(out_fs, [num_unrollings, bsize, 1])
+#     one_chunk_out = tf.reshape(tf.slice(out_fs, [0, 0, 0], [num_unrollings, 1, 1]), [-1])
+#     in_all = tf.stack(in_fs)
+#     one_chunk_in = tf.reshape(tf.slice(in_all, [0, 0, 0], [num_unrollings, 1, 1]), [-1])
+#     return tf.stack([one_chunk_in, one_chunk_out], axis=1)
+#
+# env.register_build_function(all_non_zero, 'all_nz')
+# env.register_build_function(in_and_out_f_comp, 'in_and_out_flags')
+#
+#
+# def all_nz(tmpl, hook_name, number):
+#     schedule = dict()
+#     env.register_builder('all_nz',
+#                          tensor_names=dict([('tensor_%s' % i, tmpl % i) for i in range(number)]),
+#                          output_hook_name=hook_name)
+#     schedule[hook_name] = [i for i in range(30)]
+#     return schedule
+#
+#
+# def in_and_out(hook_name, number):
+#     schedule = dict()
+#     tensor_names = dict()
+#     tensor_names['out'] = 'out_s_on_dev_0:0'
+#     for i in range(number):
+#         tensor_names['in_%s' % i] = 'in_s_flags_on_dev_0:%s' % i
+#     env.register_builder('in_and_out_flags',
+#                          tensor_names=tensor_names,
+#                          output_hook_name=hook_name)
+#     schedule[hook_name] = [i for i in range(30)]
+#     return schedule
+#
+# # train_tensors['train_print_tensors'].update(all_nz('in_s_flags_on_dev_0:%s', 'nz_in_flags', 20))
+# # train_tensors['train_print_tensors'].update(all_nz('out_s_on_dev_0:%s', 'nz_out_flags', 1))
+# train_tensors['train_print_tensors'].update(in_and_out('in_and_out_flags', 20))
+#
+# """lstm sample"""
+# add_feed = [{'placeholder': 'dropout', 'value': 0.9},
+#             {'placeholder': 'sampling_prob',
+#              'value': {'type': 'linear', 'start': 0., 'end': 1., 'interval': 3000}},
+#             {'placeholder': 'loss_comp_prob',
+#              'value': {'type': 'linear', 'start': 1., 'end': 0., 'interval': 3000}}]
+# valid_add_feed = [# {'placeholder': 'sampling_prob', 'value': 1.},
+#                   {'placeholder': 'dropout', 'value': 1.}]
 # env.build(batch_size=64,
 #           num_layers=2,
-#           num_nodes=[300, 300],
+#           num_nodes=[100, 100],
 #           num_output_layers=2,
 #           num_output_nodes=[124],
 #           vocabulary_size=vocabulary_size,
 #           embedding_size=128,
-#           num_unrollings=20)
+#           num_unrollings=10,
+#           character_positions_in_vocabulary=cpiv)
 #
-# # env.add_hooks(tensor_names=tensor_names)
-# env.train(save_path='debugging_lstm_and_gru/first',
+# env.add_hooks(tensor_names=tensor_names)
+# env.train(save_path='debugging_lstm_sample/first',
+#           allow_growth=False,
+#           gpu_memory=.5,
+#           # log_device_placement=True,
 #           learning_rate={'type': 'exponential_decay',
-#                          'init': .002,
+#                          'init': .001,
 #                          'decay': .9,
-#                          'period': 500},
+#                          'period': 2000},
 #           additions_to_feed_dict=add_feed,
 #           validation_additions_to_feed_dict=valid_add_feed,
 #           batch_size=64,
-#           num_unrollings=20,
+#           num_unrollings=10,
 #           vocabulary=vocabulary,
 #           checkpoint_steps=[100],
 #           result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
@@ -204,8 +170,51 @@ env.train(save_path='debugging_lstm_sample/first',
 #           train_dataset_text=train_text,
 #           validation_dataset_texts=[valid_text],
 #           # validation_dataset=[valid_text],
-#           results_collect_interval=100,
-#           no_validation=False)
+#           results_collect_interval=200,
+#           no_validation=False,
+#           add_graph_to_summary=True)
+
+"""lstm and gru"""
+# env = Environment(Gru, BatchGenerator, vocabulary=vocabulary)
+env = Environment(Lstm, LstmBatchGenerator, vocabulary=vocabulary)
+add_feed = [{'placeholder': 'dropout', 'value': 0.9}]
+valid_add_feed = [{'placeholder': 'dropout', 'value': 1.}]
+
+env.build(batch_size=64,
+          num_layers=2,
+          num_nodes=[300, 300],
+          num_output_layers=2,
+          num_output_nodes=[124],
+          vocabulary_size=vocabulary_size,
+          embedding_size=128,
+          num_unrollings=20,
+          going_to_limit_memory=True)
+
+# env.add_hooks(tensor_names=tensor_names)
+env.train(save_path='debugging_lstm_and_gru/first',
+          learning_rate={'type': 'exponential_decay',
+                         'init': .002,
+                         'decay': .9,
+                         'period': 500},
+          additions_to_feed_dict=add_feed,
+          validation_additions_to_feed_dict=valid_add_feed,
+          batch_size=64,
+          num_unrollings=20,
+          vocabulary=vocabulary,
+          checkpoint_steps=[100],
+          result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
+          printed_result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
+          # validation_tensor_schedule=valid_tensors,
+          # train_tensor_schedule=train_tensors,
+          stop=5000,
+          # train_dataset_text='abx',
+          # validation_datasets_texts=['abc'],
+          train_dataset_text=train_text,
+          validation_dataset_texts=[valid_text],
+          # validation_dataset=[valid_text],
+          results_collect_interval=100,
+          no_validation=False,
+          gpu_memory=.5)
 
 connection_interval = 8
 connection_visibility = 5

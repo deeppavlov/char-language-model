@@ -638,7 +638,8 @@ class Lstm(Model):
                  num_gpus=1,
                  regularization_rate=.000003,
                  character_positions_in_vocabulary=None,
-                 regime='train'):
+                 regime='train',
+                 going_to_limit_memory=False):
 
         self._hooks = dict(inputs=None,
                            labels=None,
@@ -668,7 +669,10 @@ class Lstm(Model):
         self._regularization_rate = regularization_rate
         self._big_size = 10
 
-        self._gpu_names = get_available_gpus()
+        if not going_to_limit_memory:
+            self._gpu_names = get_available_gpus()
+        else:
+            self._gpu_names = ['/gpu:%s' % i for i in range(num_gpus)]
         num_available_gpus = len(self._gpu_names)
         num_gpus, self._batch_sizes_on_gpus = get_num_gpus_and_bs_on_gpus(self._batch_size, num_gpus, num_available_gpus)
         self._num_gpus = num_gpus

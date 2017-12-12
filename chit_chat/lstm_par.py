@@ -275,7 +275,8 @@ class Lstm(Model):
                  num_unrollings=10,
                  init_parameter=.3,
                  num_gpus=1,
-                 regularization_rate=.000003):
+                 regularization_rate=.000003,
+                 going_to_limit_memory=False):
         self._batch_size = batch_size
         self._num_layers = num_layers
         self._num_nodes = num_nodes
@@ -287,7 +288,10 @@ class Lstm(Model):
         self._init_parameter = init_parameter
         self._regularization_rate = regularization_rate
 
-        gpu_names = get_available_gpus()
+        if not going_to_limit_memory:
+            gpu_names = get_available_gpus()
+        else:
+            gpu_names = ['/gpu:%s' % i for i in range(num_gpus)]
         num_available_gpus = len(gpu_names)
         num_gpus, batch_sizes_on_gpus = get_num_gpus_and_bs_on_gpus(self._batch_size, num_gpus, num_available_gpus)
         self._num_gpus = num_gpus

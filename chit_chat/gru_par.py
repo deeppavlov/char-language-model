@@ -398,7 +398,8 @@ class Gru(Model):
                  init_parameter=3.,
                  num_gpus=1,
                  regularization_rate=.000003,
-                 regime='train'):
+                 regime='train',
+                 going_to_limit_memory=False):
 
         self._hooks = dict(inputs=None,
                            labels=None,
@@ -424,7 +425,10 @@ class Gru(Model):
         self._init_parameter = init_parameter
         self._regularization_rate = regularization_rate
 
-        self._gpu_names = get_available_gpus()
+        if not going_to_limit_memory:
+            self._gpu_names = get_available_gpus()
+        else:
+            self._gpu_names = ['/gpu:%s' % i for i in range(num_gpus)]
         num_available_gpus = len(self._gpu_names)
         num_gpus, self._batch_sizes_on_gpus = get_num_gpus_and_bs_on_gpus(self._batch_size, num_gpus, num_available_gpus)
         self._num_gpus = num_gpus
