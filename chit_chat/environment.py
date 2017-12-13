@@ -1549,7 +1549,7 @@ class Environment(object):
         sample_input = self._pupil_hooks['validation_inputs']
         sample_prediction = self._pupil_hooks['validation_predictions']
         # print('ord(\'\\n\'):', ord('\n'))
-        while char != '\n' and counter < 500:
+        while char != '\n' and counter < 250:
             feed = batch_generator_class.pred2vec(prediction, flag, 2)
             # print('prediction after sampling:', prediction)
             # print('feed:', feed)
