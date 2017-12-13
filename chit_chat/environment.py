@@ -1,5 +1,11 @@
+import time
 import numpy as np
 import re
+import queue
+import csv
+import sys
+import select
+from io import StringIO
 import multiprocessing as mp
 from collections import OrderedDict
 
@@ -1443,21 +1449,13 @@ class Environment(object):
         create_path(log_path, file_name_is_in_path=True)
         if not appending:
             log_path = add_index_to_filename_if_needed(log_path)
-        if appending:
-            fd = open(log_path, 'a', encoding='utf-8')
-        else:
-            fd = open(log_path, 'w', encoding='utf-8')
-        config = tf.ConfigProto(allow_soft_placement=True,
-                                log_device_placement=False)
-        if gpu_memory is not None:
-            config.gpu_options.per_process_gpu_memory_fraction = gpu_memory
         self._start_session(allow_soft_placement,
                             log_device_placement,
                             gpu_memory,
                             allow_growth,
                             visible_device_list)
         if restore_path is None:
-            print_and_log('Skipping variables restoring. Continuing on current variables values', fd=fd)
+            print_and_log('Skipping variables restoring. Continuing on current variables values', fn=log_path)
         else:
             self._initialize_pupil(restore_path)
         self._pupil_hooks['reset_validation_state'].run(session=self._session)
@@ -1469,7 +1467,7 @@ class Environment(object):
         sample_input = self._pupil_hooks['validation_inputs']
         while not human_replica == 'FINISH':
             if human_replica != '':
-                print_and_log('Human: ' + human_replica, _print=False, fd=fd)
+                print_and_log('Human: ' + human_replica, _print=False, fn=log_path)
                 for char in human_replica:
                     feed = batch_generator_class.char2vec(char, characters_positions_in_vocabulary, 0, 2)
                     # print('feed.shape:', feed.shape)
@@ -1505,16 +1503,233 @@ class Environment(object):
                     # print('ord(char):', ord(char))
                     bot_replica += char
                 counter += 1
-            print_and_log('Bot: ' + bot_replica, fd=fd)
+            print_and_log('Bot: ' + bot_replica, fn=log_path)
             feed = batch_generator_class.char2vec('\n', characters_positions_in_vocabulary, 1, 2)
             feed_dict = dict(feed_dict_base.items())
             feed_dict[sample_input] = feed
             _ = sample_prediction.eval(feed_dict=feed_dict, session=self._session)
 
             human_replica = input('Human: ')
-        fd.write('\n*********************')
-        fd.close()
+        with open(log_path, 'a') as fd:
+            fd.write('\n*********************')
         self._close_session()
+
+    def _feed_replica(self, replica, batch_generator_class,
+                      characters_positions_in_vocabulary, temperature, feed_dict_base, speaker):
+        if speaker == 'bot':
+            flag = 1
+        else:
+            flag = 0
+        sample_input = self._pupil_hooks['validation_inputs']
+        sample_prediction = self._pupil_hooks['validation_predictions']
+        for char in replica:
+            feed = batch_generator_class.char2vec(char, characters_positions_in_vocabulary, flag, 2)
+            # print('feed.shape:', feed.shape)
+            feed_dict = dict(feed_dict_base.items())
+            feed_dict[sample_input] = feed
+            _ = sample_prediction.eval(feed_dict=feed_dict, session=self._session)
+        feed = batch_generator_class.char2vec('\n', characters_positions_in_vocabulary, flag, 2)
+        feed_dict = dict(feed_dict_base.items())
+        feed_dict[sample_input] = feed
+        prediction = sample_prediction.eval(feed_dict=feed_dict, session=self._session)
+        if temperature != 0.:
+            prediction = apply_temperature(prediction, -1, temperature)
+            prediction = sample(prediction, -1)
+        return prediction
+
+    def _generate_replica(self, prediction, batch_generator_class, vocabulary,
+                          characters_positions_in_vocabulary, temperature, feed_dict_base, speaker):
+        if speaker == 'bot':
+            flag = 1
+        else:
+            flag = 0
+        counter = 0
+        char = None
+        bot_replica = ""
+        sample_input = self._pupil_hooks['validation_inputs']
+        sample_prediction = self._pupil_hooks['validation_predictions']
+        # print('ord(\'\\n\'):', ord('\n'))
+        while char != '\n' and counter < 500:
+            feed = batch_generator_class.pred2vec(prediction, flag, 2)
+            # print('prediction after sampling:', prediction)
+            # print('feed:', feed)
+            feed_dict = dict(feed_dict_base.items())
+            feed_dict[sample_input] = feed
+            prediction = sample_prediction.eval(feed_dict=feed_dict, session=self._session)
+            # print('prediction before sampling:', prediction)
+            if temperature != 0.:
+                prediction = apply_temperature(prediction, -1, temperature)
+                # print('prediction after temperature:', prediction)
+                prediction = sample(prediction, -1)
+            char = batch_generator_class.vec2char(np.reshape(feed, (1, -1)), vocabulary)[0]
+            if char != '\n':
+                # print('char != \'\\n\', counter = %s' % counter)
+                # print('ord(char):', ord(char))
+                bot_replica += char
+            counter += 1
+        feed = batch_generator_class.char2vec('\n', characters_positions_in_vocabulary, flag, 2)
+        feed_dict = dict(feed_dict_base.items())
+        feed_dict[sample_input] = feed
+        _ = sample_prediction.eval(feed_dict=feed_dict, session=self._session)
+        return bot_replica, prediction
+
+    def _one_chat(
+            self,
+            kwargs_for_building,
+            restore_path,
+            # log_path,
+            vocabulary,
+            characters_positions_in_vocabulary,
+            batch_generator_class,
+            additions_to_feed_dict,
+            gpu_memory,
+            allow_growth,
+            temperature,
+            inq,
+            outq):
+        # print('entered _one_chat')
+        self._build(kwargs_for_building)
+        if additions_to_feed_dict is None:
+            feed_dict_base = dict()
+        else:
+            feed_dict_base = dict()
+            for addition in additions_to_feed_dict:
+                feed_dict_base[self._pupil_hooks[addition['placeholder']]] = addition['value']
+        self._start_session(False,
+                            False,
+                            gpu_memory,
+                            allow_growth,
+                            '')
+        self._initialize_pupil(restore_path)
+        self._pupil_hooks['reset_validation_state'].run(session=self._session)
+        greeting = 'Здравствуйте, я бот.'
+        # print_and_log('Bot: ' + greeting, _print=False, fn=log_path)
+        _ = inq.get(block=False)
+        outq.put(greeting)
+        # print('greeting is put in queue')
+        prediction = self._feed_replica(
+            greeting, batch_generator_class,
+            characters_positions_in_vocabulary, temperature, feed_dict_base, 'bot')
+        timeshot = time.clock()
+        try:
+            human_replica = inq.get(timeout=300)
+        except queue.Empty:
+            human_replica = ''
+            pass
+
+        while not human_replica == '/end' and time.clock() - timeshot < 300:
+            if human_replica != '':
+                # print_and_log('Human: ' + human_replica, _print=False, fn=log_path)
+                prediction = self._feed_replica(
+                    human_replica, batch_generator_class,
+                    characters_positions_in_vocabulary, temperature, feed_dict_base, 'human'
+                )
+            bot_replica, prediction = self._generate_replica(
+                prediction, batch_generator_class, vocabulary,
+                characters_positions_in_vocabulary, temperature, feed_dict_base, 'bot')
+            # print_and_log('Bot: ' + bot_replica, _print=False, fn=log_path)
+            outq.put(bot_replica)
+            timeshot = time.clock()
+            try:
+                human_replica = inq.get(timeout=300)
+            except queue.Empty:
+                human_replica = ''
+        # print('reached -1')
+        outq.put(-1)
+
+    def telegram(self,
+                 kwargs_for_building,
+                 restore_path,
+                 log_path,
+                 vocabulary,
+                 characters_positions_in_vocabulary,
+                 batch_generator_class,
+                 additions_to_feed_dict=None,
+                 gpu_memory=None,
+                 allow_growth=True,
+                 temperature=0.):
+        if len(log_path) > 4 and log_path[-4:] == '.txt':
+            create_path(log_path, file_name_is_in_path=True)
+        else:
+            create_path(log_path, file_name_is_in_path=False)
+
+        inqs = dict()
+        outqs = dict()
+        ps = dict()
+        file_names = dict()
+
+        writer = csv.writer(sys.stdout, quoting=csv.QUOTE_NONNUMERIC)
+        read_list = [sys.stdin]
+        try:
+            while read_list:
+                # print('entered while loop')
+                ready = select.select(read_list, [], [], 0)[0]
+                if ready:
+                    # print('ready:', ready)
+                    text = ready[0].readline()
+                    # print('text:', text)
+                    row = csv.reader([text]).__next__()
+                    chat_id, question = int(row[0]), row[1]
+
+                    if chat_id not in inqs:
+                        # print('chat_id not in inqs')
+                        if len(log_path) > 4 and log_path[-4:] == '.txt':
+                            file_name = add_index_to_filename_if_needed(log_path, index=0)
+                        else:
+                            file_name = add_index_to_filename_if_needed(log_path + '/chat.txt', index=0)
+                        file_names[chat_id] = file_name
+                        inqs[chat_id] = mp.Queue()
+                        outqs[chat_id] = mp.Queue()
+                        ps[chat_id] = mp.Process(target=self._one_chat,
+                                                 args=(kwargs_for_building, restore_path, vocabulary,
+                                                       characters_positions_in_vocabulary,
+                                                       batch_generator_class, additions_to_feed_dict, gpu_memory,
+                                                       allow_growth, temperature, inqs[chat_id], outqs[chat_id]))
+                        inqs[chat_id].put(question)
+                        ps[chat_id].start()
+                        # print('ps:', ps)
+                    else:
+                        inqs[chat_id].put(question)
+
+                    if question != '/start' and question != '/end':
+                        print_and_log('Human: ' + question, _print=False, fn=file_names[chat_id])
+                # print('reached outqs loop')
+                for chat_id in list(outqs.keys()):
+                    try:
+                        bot_replica = outqs[chat_id].get(block=False)
+                    except queue.Empty:
+                        bot_replica = -2
+                    if bot_replica == -1:
+                        ps[chat_id].join()
+                        if ps[chat_id].is_alive():
+                            print('WARNING! Could not join process for chat %s' % chat_id)
+                            ps[chat_id].terminate()
+                            ps[chat_id].join()
+                        del ps[chat_id]
+                        del inqs[chat_id]
+                        del outqs[chat_id]
+                        del file_names[chat_id]
+                    elif bot_replica != -2:
+                        print_and_log('Bot: ' + bot_replica, _print=False, fn=file_names[chat_id])
+                        writer.writerow([chat_id, bot_replica, "my.file", "/start", "Ты дурак", "/end"])
+                        sys.stdout.flush()
+        except KeyboardInterrupt:
+            for inq in inqs.values():
+                inq.put('/end')
+            for chat_id, outq in outqs.items():
+                try:
+                    flag = outq.get(timeout=.01)
+                    print('1 try')
+                    while flag != -1:
+                        flag = outq.get(timeout=.01)
+                        print('another try')
+                except queue.Empty:
+                    print('WARNING! Process termination flag was not received for chat %s' % chat_id)
+                ps[chat_id].join(timeout=.01)
+                if ps[chat_id].is_alive():
+                    print('WARNING! Could not join process for chat %s' % chat_id)
+                    ps[chat_id].terminate()
+                    ps[chat_id].join()
 
     def generate_discriminator_dataset(self,
                                        num_examples,

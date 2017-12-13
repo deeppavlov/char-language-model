@@ -37,7 +37,7 @@ valid_add_feed = [# {'placeholder': 'sampling_prob', 'value': 1.},
 
 env.build(batch_size=64,
           num_layers=2,
-          num_nodes=[1000, 1000],
+          num_nodes=[400, 400],
           num_output_layers=2,
           num_output_nodes=[650],
           vocabulary_size=vocabulary_size,

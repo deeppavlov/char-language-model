@@ -386,13 +386,15 @@ def add_missing_to_list(extended_list, added_list):
     return extended_list
 
 
-def print_and_log(*inputs, log=True, _print=True, fd=None):
+def print_and_log(*inputs, log=True, _print=True, fn=None):
     if _print:
         print(*inputs)
     if log:
         for inp in inputs:
-            fd.write(str(inp))
-        fd.write('\n')
+            with open(fn, 'a') as fd:
+                fd.write(str(inp))
+        with open(fn, 'a') as fd:
+            fd.write('\n')
 
 
 def apply_temperature(array, axis, temperature):
