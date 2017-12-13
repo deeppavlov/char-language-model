@@ -1711,7 +1711,7 @@ class Environment(object):
                         del file_names[chat_id]
                     elif bot_replica != -2:
                         print_and_log('Bot: ' + bot_replica, _print=False, fn=file_names[chat_id])
-                        writer.writerow([chat_id, bot_replica, "my.file", "/start", "Ты дурак", "/end"])
+                        writer.writerow([chat_id, bot_replica, "my.file", "/start", "Ты дурак.", "/end"])
                         sys.stdout.flush()
         except KeyboardInterrupt:
             for inq in inqs.values():
