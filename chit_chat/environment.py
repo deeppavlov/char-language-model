@@ -14,7 +14,7 @@ from tensorflow.python import debug as tf_debug
 from some_useful_functions import InvalidArgumentError
 from some_useful_functions import (construct, add_index_to_filename_if_needed, match_two_dicts, create_path,
                                    check_if_key_in_nested_dict, add_missing_to_list, print_and_log,
-                                   apply_temperature, sample)
+                                   apply_temperature, sample, is_int)
 from args_parsing import parse_1_set_of_kwargs, parse_train_method_arguments, \
     formalize_and_create_insertions_for_build_hps, formalize_and_create_insertions_for_other_hps, \
     create_all_args_for_launches, configure_args_for_launches
@@ -1667,39 +1667,46 @@ class Environment(object):
                 if ready:
                     # print('ready:', ready)
                     text = ready[0].readline()
-                    # print('text:', text)
+                    print('text:', text)
                     row = csv.reader([text]).__next__()
-                    chat_id, question = int(row[0]), row[1]
-
-                    if chat_id not in inqs:
-                        # print('chat_id not in inqs')
-                        if len(log_path) > 4 and log_path[-4:] == '.txt':
-                            file_name = add_index_to_filename_if_needed(log_path, index=0)
+                    r0 = row[0]
+                    if is_int(r0):
+                        chat_id, question = int(r0), row[1]
+                        if chat_id not in inqs:
+                            # print('chat_id not in inqs')
+                            if len(log_path) > 4 and log_path[-4:] == '.txt':
+                                file_name = add_index_to_filename_if_needed(log_path, index=0)
+                            else:
+                                file_name = add_index_to_filename_if_needed(log_path + '/chat.txt', index=0)
+                            file_names[chat_id] = file_name
+                            inqs[chat_id] = mp.Queue()
+                            outqs[chat_id] = mp.Queue()
+                            ps[chat_id] = mp.Process(target=self._one_chat,
+                                                     args=(kwargs_for_building, restore_path, vocabulary,
+                                                           characters_positions_in_vocabulary,
+                                                           batch_generator_class, additions_to_feed_dict, gpu_memory,
+                                                           allow_growth, temperature, inqs[chat_id], outqs[chat_id]))
+                            inqs[chat_id].put(question)
+                            ps[chat_id].start()
+                            # print('ps:', ps)
                         else:
-                            file_name = add_index_to_filename_if_needed(log_path + '/chat.txt', index=0)
-                        file_names[chat_id] = file_name
-                        inqs[chat_id] = mp.Queue()
-                        outqs[chat_id] = mp.Queue()
-                        ps[chat_id] = mp.Process(target=self._one_chat,
-                                                 args=(kwargs_for_building, restore_path, vocabulary,
-                                                       characters_positions_in_vocabulary,
-                                                       batch_generator_class, additions_to_feed_dict, gpu_memory,
-                                                       allow_growth, temperature, inqs[chat_id], outqs[chat_id]))
-                        inqs[chat_id].put(question)
-                        ps[chat_id].start()
-                        # print('ps:', ps)
-                    else:
-                        inqs[chat_id].put(question)
+                            inqs[chat_id].put(question)
 
-                    if question != '/start' and question != '/end':
-                        print_and_log('Human: ' + question, _print=False, fn=file_names[chat_id])
+
+                        if question != '/start' and question != '/end':
+                            print_and_log('Human: ' + question, _print=False, fn=file_names[chat_id])
                 # print('reached outqs loop')
                 for chat_id in list(outqs.keys()):
                     try:
                         bot_replica = outqs[chat_id].get(block=False)
                     except queue.Empty:
                         bot_replica = -2
+                    if not is_int(r0):
+                        print(r0)
+                        bot_replica = "Ой, помедленней, пожалуйста, я не успеваю!"
+                        r0 = 0
                     if bot_replica == -1:
+                        print(-1)
                         ps[chat_id].join()
                         if ps[chat_id].is_alive():
                             print('WARNING! Could not join process for chat %s' % chat_id)
@@ -1711,8 +1718,9 @@ class Environment(object):
                         del file_names[chat_id]
                     elif bot_replica != -2:
                         print_and_log('Bot: ' + bot_replica, _print=False, fn=file_names[chat_id])
-                        writer.writerow([chat_id, bot_replica, "my.file", "/start", "Ты дурак.", "/end"])
+                        writer.writerow([chat_id, bot_replica, "", "/start", "Ты дурак.", "/end"])
                         sys.stdout.flush()
+
         except KeyboardInterrupt:
             for inq in inqs.values():
                 inq.put('/end')
