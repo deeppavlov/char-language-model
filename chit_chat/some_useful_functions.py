@@ -641,3 +641,11 @@ def unite_dicts(list_of_dicts):
     for d in list_of_dicts:
         new_dict.update(d)
     return new_dict
+
+
+def is_int(s):
+    try:
+        int(s)
+        return True
+    except ValueError:
+        return False
