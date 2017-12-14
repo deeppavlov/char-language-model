@@ -389,7 +389,7 @@ class Lstm(Model):
                  num_unrollings=10,
                  init_parameter=3.,
                  num_gpus=1,
-                 regularization_rate=.000003,
+                 regularization_rate=.000006,
                  regime='train',
                  going_to_limit_memory=False):
 
