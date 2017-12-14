@@ -623,8 +623,8 @@ class Environment(object):
         if self._session is not None:
             print('Warning: there is an opened session already. Closing it')
             self._session.close()
-        print('(_start_session)gpu_memory:', gpu_memory)
-        print('(_start_session)allow_growth:', allow_growth)
+        # print('(_start_session)gpu_memory:', gpu_memory)
+        # print('(_start_session)allow_growth:', allow_growth)
         config = tf.ConfigProto(allow_soft_placement=allow_soft_placement,
                                 gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=gpu_memory,
                                                           allow_growth=allow_growth,
@@ -1610,30 +1610,36 @@ class Environment(object):
         prediction = self._feed_replica(
             greeting, batch_generator_class,
             characters_positions_in_vocabulary, temperature, feed_dict_base, 'bot')
-        timeshot = time.clock()
+        timeshot = time.time()
         try:
             human_replica = inq.get(timeout=300)
         except queue.Empty:
             human_replica = ''
             pass
 
-        while not human_replica == '/end' and time.clock() - timeshot < 300:
+        while not human_replica == '/end' and time.time() - timeshot < 290:
+            # print('(start while)time.time() - timeshot =', time.time() - timeshot)
+            # print('(start while)time.time() =', time.time())
+            # print('(start while)timeshot =', timeshot)
             if human_replica != '':
                 # print_and_log('Human: ' + human_replica, _print=False, fn=log_path)
                 prediction = self._feed_replica(
                     human_replica, batch_generator_class,
                     characters_positions_in_vocabulary, temperature, feed_dict_base, 'human'
                 )
-            bot_replica, prediction = self._generate_replica(
-                prediction, batch_generator_class, vocabulary,
-                characters_positions_in_vocabulary, temperature, feed_dict_base, 'bot')
-            # print_and_log('Bot: ' + bot_replica, _print=False, fn=log_path)
-            outq.put(bot_replica)
-            timeshot = time.clock()
+                bot_replica, prediction = self._generate_replica(
+                    prediction, batch_generator_class, vocabulary,
+                    characters_positions_in_vocabulary, temperature, feed_dict_base, 'bot')
+                # print_and_log('Bot: ' + bot_replica, _print=False, fn=log_path)
+                outq.put(bot_replica)
+                timeshot = time.time()
             try:
                 human_replica = inq.get(timeout=300)
             except queue.Empty:
                 human_replica = ''
+            # print('(end while)time.time() - timeshot =', time.time() - timeshot)
+            # print('(end while)time.time() =', time.time())
+            # print('(end while)timeshot =', timeshot)
         # print('reached -1')
         outq.put(-1)
 
@@ -1667,11 +1673,11 @@ class Environment(object):
                 if ready:
                     # print('ready:', ready)
                     text = ready[0].readline()
-                    print('text:', text)
+                    # print('text:', text)
                     row = csv.reader([text]).__next__()
-                    r0 = row[0]
-                    if is_int(r0):
-                        chat_id, question = int(r0), row[1]
+                    chat_id_has_corr_format = is_int(row[0])
+                    if chat_id_has_corr_format:
+                        chat_id, question = int(row[0]), row[1]
                         if chat_id not in inqs:
                             # print('chat_id not in inqs')
                             if len(log_path) > 4 and log_path[-4:] == '.txt':
@@ -1701,12 +1707,8 @@ class Environment(object):
                         bot_replica = outqs[chat_id].get(block=False)
                     except queue.Empty:
                         bot_replica = -2
-                    if not is_int(r0):
-                        print(r0)
-                        bot_replica = "Ой, помедленней, пожалуйста, я не успеваю!"
-                        r0 = 0
                     if bot_replica == -1:
-                        print(-1)
+                        # print(-1)
                         ps[chat_id].join()
                         if ps[chat_id].is_alive():
                             print('WARNING! Could not join process for chat %s' % chat_id)
@@ -1727,10 +1729,10 @@ class Environment(object):
             for chat_id, outq in outqs.items():
                 try:
                     flag = outq.get(timeout=.01)
-                    print('1 try')
+                    # print('1 try')
                     while flag != -1:
                         flag = outq.get(timeout=.01)
-                        print('another try')
+                        # print('another try')
                 except queue.Empty:
                     print('WARNING! Process termination flag was not received for chat %s' % chat_id)
                 ps[chat_id].join(timeout=.01)
