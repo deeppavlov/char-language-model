@@ -48,7 +48,9 @@ def char2id(char, character_positions_in_vocabulary):
     if char in character_positions_in_vocabulary:
         return character_positions_in_vocabulary[char]
     else:
-        print(u'Unexpected character: %s\nUnexpected character number: %s\n' % (char, ord(char)))
+        print(u'Unexpected character: %s\nUnexpected character number: %s\n' %
+              (repr(char), str([ord(c) for c in char])))
+        raise ValueError
         return None
 
 

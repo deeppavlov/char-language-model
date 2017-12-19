@@ -24,7 +24,7 @@ class LstmBatchGenerator(object):
         return np.reshape(char2vec(char, characters_positions_in_vocabulary), (1, 1, -1))
 
     @staticmethod
-    def pred2vec(pred, speaker_idx, speaker_flag_size):
+    def pred2vec(pred, speaker_idx, speaker_flag_size, batch_gen_args):
         return np.reshape(pred2vec(pred), (1, 1, -1))
 
     @staticmethod
@@ -120,9 +120,11 @@ class Lstm(Model):
     def get_name(cls):
         return cls._name
 
-    @staticmethod
-    def get_special_args():
-        return dict()
+    def get_special_args(self):
+        if self._number_of_punctuation_marks is None:
+            return dict()
+        else:
+            return {'mark_vec_len': self._mark_vec_len}
 
     @staticmethod
     def form_kwargs(kwargs_for_building, insertions):
@@ -250,7 +252,7 @@ class Lstm(Model):
         else:
             input_dim = self._num_output_nodes[idx-1]
         if idx == self._num_output_layers - 1:
-            output_dim = self._vocabulary_size
+            output_dim = self._vec_dim
         else:
             output_dim = self._num_output_nodes[idx]
         stddev = self._init_parameter * np.sqrt(1. / input_dim)
@@ -258,7 +260,7 @@ class Lstm(Model):
 
     def _l2_loss(self, matrices):
         with tf.name_scope('l2_loss'):
-            regularizer = tf.contrib.layers.l2_regularizer(.5)
+            regularizer = tf.contrib.layers.l2_regularizer(1.)
             loss = 0
             for matr in matrices:
                 loss += regularizer(matr)
@@ -268,11 +270,11 @@ class Lstm(Model):
         tower_grads = list()
         preds = list()
         losses = list()
-        for gpu_batch_size, gpu_name, device_inputs, device_labels in zip(
-                self._batch_sizes_on_gpus, self._gpu_names, self._inputs_by_device, self._labels_by_device):
-            with tf.device(gpu_name):
-                with tf.name_scope(device_name_scope(gpu_name)):
-                    with tf.name_scope('train'):
+        with tf.name_scope('train'):
+            for gpu_batch_size, gpu_name, device_inputs, device_labels in zip(
+                    self._batch_sizes_on_gpus, self._gpu_names, self._inputs_by_device, self._labels_by_device):
+                with tf.device(gpu_name):
+                    with tf.name_scope(device_name_scope(gpu_name)):
                         saved_states = list()
                         for layer_idx, layer_num_nodes in enumerate(self._num_nodes):
                             saved_states.append(
@@ -299,8 +301,55 @@ class Lstm(Model):
                             all_matrices.extend(self._output_matrices)
                             l2_loss = self._l2_loss(all_matrices)
 
-                            loss = tf.reduce_mean(
-                                tf.nn.softmax_cross_entropy_with_logits(labels=device_labels, logits=logits))
+                            if self._number_of_punctuation_marks is None:
+                                loss = tf.reduce_mean(
+                                    tf.nn.softmax_cross_entropy_with_logits(labels=device_labels, logits=logits))
+                                concat_pred = tf.nn.softmax(logits)
+                                preds.append(tf.split(concat_pred, self._num_unrollings))
+                            else:
+                                word_labels, punctuation_labels = tf.split(
+                                    device_labels, [self._vocabulary_size, self._mark_vec_len],
+                                    axis=1, name='word_and_punctuation_labels')
+                                word_logits, punctuation_logits = tf.split(
+                                    logits, [self._vocabulary_size, self._mark_vec_len],
+                                    axis=1, name='word_and_punctuation_logits')
+
+                                word_loss = tf.reduce_mean(
+                                    tf.nn.softmax_cross_entropy_with_logits(
+                                        labels=word_labels, logits=word_logits))
+                                word_pred_concat = tf.nn.softmax(word_logits)
+
+                                if self._punctuation_encoding == 'positional_notation':
+                                    punctuation_pred_concat = tf.tanh(punctuation_logits)
+                                    punctuation_loss = tf.divide(
+                                        tf.reduce_sum(
+                                            tf.nn.l2_loss(
+                                                tf.tanh(punctuation_labels - punctuation_logits))),
+                                        self._batch_size,
+                                        name='punctuation_loss')
+                                elif self._punctuation_encoding == 'one_hot':
+                                    separate_mark_labels = tf.split(
+                                        punctuation_labels, self._max_mark_num, axis=1, name='separate_mark_labels')
+                                    separate_mark_labels = tf.concat(
+                                        separate_mark_labels, 0, name='separate_mark_labels_concat')
+                                    separate_mark_logits = tf.split(
+                                        punctuation_logits, self._max_mark_num, axis=1, name='separate_mark_logits')
+                                    separate_mark_logits = tf.concat(
+                                        separate_mark_logits, 0, name='separate_mark_logits_concat')
+
+                                    punctuation_loss = tf.reduce_mean(
+                                        tf.nn.softmax_cross_entropy_with_logits(
+                                            labels=separate_mark_labels, logits=separate_mark_logits))
+
+                                    separate_mark_preds = tf.nn.softmax(
+                                        separate_mark_logits, name='separate_mark_preds')
+                                    separate_mark_preds = tf.split(separate_mark_preds, self._max_mark_num, axis=0)
+                                    punctuation_pred_concat = tf.concat(separate_mark_preds, 1)
+
+                                concat_pred = tf.concat([word_pred_concat, punctuation_pred_concat], 1)
+                                preds.append(tf.split(concat_pred, self._num_unrollings))
+
+                                loss = word_loss + punctuation_loss
                             losses.append(loss)
                             # optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
                             optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
@@ -308,38 +357,35 @@ class Lstm(Model):
                             tower_grads.append(grads_and_vars)
 
                             # splitting concatenated results for different characters
-                            concat_pred = tf.nn.softmax(logits)
-                            preds.append(tf.split(concat_pred, self._num_unrollings))
+            with tf.device('/cpu:0'):
+                with tf.name_scope(device_name_scope('/cpu:0') + '_gradients'):
+                    grads_and_vars = average_gradients(tower_grads)
+                    grads, v = zip(*grads_and_vars)
+                    grads, _ = tf.clip_by_global_norm(grads, 1.)
+                    self.train_op = optimizer.apply_gradients(zip(grads, v))
+                    self._hooks['train_op'] = self.train_op
 
-        with tf.device('/cpu:0'):
-            with tf.name_scope(device_name_scope('/cpu:0') + '_gradients'):
-                grads_and_vars = average_gradients(tower_grads)
-                grads, v = zip(*grads_and_vars)
-                grads, _ = tf.clip_by_global_norm(grads, 1.)
-                self.train_op = optimizer.apply_gradients(zip(grads, v))
-                self._hooks['train_op'] = self.train_op
-
-                # composing predictions
-                preds_by_char = list()
-                # print('preds:', preds)
-                for one_char_preds in zip(*preds):
-                    # print('one_char_preds:', one_char_preds)
-                    preds_by_char.append(tf.concat(one_char_preds, 0))
-                # print('len(preds_by_char):', len(preds_by_char))
-                self.predictions = tf.concat(preds_by_char, 0)
-                self._hooks['predictions'] = self.predictions
-                # print('self.predictions.get_shape().as_list():', self.predictions.get_shape().as_list())
-                l = 0
-                for loss, gpu_batch_size in zip(losses, self._batch_sizes_on_gpus):
-                    l += float(gpu_batch_size) / float(self._batch_size) * loss
-                self.loss = l
-                self._hooks['loss'] = self.loss
+                    # composing predictions
+                    preds_by_char = list()
+                    # print('preds:', preds)
+                    for one_char_preds in zip(*preds):
+                        # print('one_char_preds:', one_char_preds)
+                        preds_by_char.append(tf.concat(one_char_preds, 0))
+                    # print('len(preds_by_char):', len(preds_by_char))
+                    self.predictions = tf.concat(preds_by_char, 0)
+                    self._hooks['predictions'] = self.predictions
+                    # print('self.predictions.get_shape().as_list():', self.predictions.get_shape().as_list())
+                    l = 0
+                    for loss, gpu_batch_size in zip(losses, self._batch_sizes_on_gpus):
+                        l += float(gpu_batch_size) / float(self._batch_size) * loss
+                    self.loss = l
+                    self._hooks['loss'] = self.loss
 
     def _validation_graph(self):
         with tf.device(self._gpu_names[0]):
             with tf.name_scope('validation'):
                 self.sample_input = tf.placeholder(tf.float32,
-                                                   shape=[1, 1, self._vocabulary_size],
+                                                   shape=[1, 1, self._vec_dim],
                                                    name='sample_input')
                 self._hooks['validation_inputs'] = self.sample_input
 
@@ -375,7 +421,14 @@ class Lstm(Model):
                 sample_save_ops = self._compose_save_list((saved_sample_state, sample_state))
 
                 with tf.control_dependencies(sample_save_ops):
-                    self.sample_prediction = tf.nn.softmax(sample_logit)
+                    if self._number_of_punctuation_marks is None:
+                        self.sample_prediction = tf.nn.softmax(sample_logit)
+                    else:
+                        word_logit, punctuation_logit = tf.split(
+                            sample_logit, [self._vocabulary_size, self._mark_vec_len], axis=1)
+                        word_pred = tf.nn.softmax(word_logit)
+                        punctuation_pred = tf.tanh(punctuation_logit)
+                        self.sample_prediction = tf.concat([word_pred, punctuation_pred], 1)
                     self._hooks['validation_predictions'] = self.sample_prediction
 
     def __init__(self,
@@ -391,7 +444,10 @@ class Lstm(Model):
                  num_gpus=1,
                  regularization_rate=.000006,
                  regime='train',
-                 going_to_limit_memory=False):
+                 going_to_limit_memory=False,
+                 number_of_punctuation_marks=None,
+                 max_mark_num=None,
+                 punctuation_encoding='one_hot'):
 
         self._hooks = dict(inputs=None,
                            labels=None,
@@ -424,14 +480,31 @@ class Lstm(Model):
         num_available_gpus = len(self._gpu_names)
         num_gpus, self._batch_sizes_on_gpus = get_num_gpus_and_bs_on_gpus(self._batch_size, num_gpus, num_available_gpus)
         self._num_gpus = num_gpus
+        if number_of_punctuation_marks is None:
+            self._number_of_punctuation_marks = None
+        else:
+            self._number_of_punctuation_marks = number_of_punctuation_marks + 1
+        self._punctuation_encoding = punctuation_encoding
+        self._max_mark_num = max_mark_num
+        if self._number_of_punctuation_marks is not None:
+            if punctuation_encoding == 'positional_notation':
+                one_mark_bits = round(np.log2(self._number_of_punctuation_marks))
+                self._mark_vec_len = self._max_mark_num * one_mark_bits
+            elif punctuation_encoding == 'one_hot':
+                one_mark_bits = self._number_of_punctuation_marks
+                self._mark_vec_len = self._max_mark_num * one_mark_bits
+            self._vec_dim = self._vocabulary_size + self._mark_vec_len
+        else:
+            self._vec_dim = self._vocabulary_size
 
         with tf.device('/cpu:0'):
             self.dropout_keep_prob = tf.placeholder(tf.float32, name='dropout_keep_prob')
 
-            self.inputs = tf.placeholder(tf.float32,
-                                         shape=[self._num_unrollings, self._batch_size, self._vocabulary_size])
-            self.labels = tf.placeholder(tf.float32,
-                                         shape=[self._num_unrollings * self._batch_size, self._vocabulary_size])
+            # print([self._num_unrollings, self._batch_size, self._vec_dim])
+            self.inputs = tf.placeholder(
+                tf.float32, shape=[self._num_unrollings, self._batch_size, self._vec_dim])
+            self.labels = tf.placeholder(
+                tf.float32, shape=[self._num_unrollings * self._batch_size, self._vec_dim])
 
 
             #in_flags
@@ -445,21 +518,24 @@ class Lstm(Model):
             for dev_idx, device_inputs in enumerate(inputs):
                 self._inputs_by_device.append(tf.unstack(device_inputs, name='inp_on_dev_%s' % dev_idx))
 
-            labels = tf.reshape(self.labels, shape=(self._num_unrollings, self._batch_size, self._vocabulary_size))
+            labels = tf.reshape(
+                self.labels,
+                shape=(self._num_unrollings, self._batch_size, self._vec_dim))
+
             labels = tf.split(labels, self._batch_sizes_on_gpus, 1)
             self._labels_by_device = list()
             for dev_idx, device_labels in enumerate(labels):
                 self._labels_by_device.append(
                     tf.reshape(device_labels,
-                               [-1, self._vocabulary_size],
+                               [-1, self._vec_dim],
                                name='labels_on_dev_%s' % dev_idx))
 
             self.learning_rate = tf.placeholder(tf.float32, name='learning_rate')
             self._hooks['learning_rate'] = self.learning_rate
 
             self._embedding_matrix = tf.Variable(
-                tf.truncated_normal([self._vocabulary_size, self._embedding_size],
-                                    stddev=self._init_parameter*np.sqrt(1./self._vocabulary_size)),
+                tf.truncated_normal([self._vec_dim, self._embedding_size],
+                                    stddev=self._init_parameter*np.sqrt(1./self._vec_dim)),
                 name='embedding_matrix')
 
             self._lstm_matrices = list()

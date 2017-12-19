@@ -5,7 +5,6 @@ import queue
 import csv
 import sys
 import select
-from io import StringIO
 import multiprocessing as mp
 from collections import OrderedDict
 
@@ -19,6 +18,7 @@ from args_parsing import parse_1_set_of_kwargs, parse_train_method_arguments, \
     formalize_and_create_insertions_for_build_hps, formalize_and_create_insertions_for_other_hps, \
     create_all_args_for_launches, configure_args_for_launches
 from handler import Handler
+from subword_nmt.apply_bpe import BPE
 
 
 class Controller(object):
@@ -130,12 +130,19 @@ def perplexity_tensor(**kwargs):
         probabilities = kwargs['probabilities']
         labels = kwargs['labels']
         special_args = kwargs['special_args']
+        probabilities_shape = probabilities.get_shape().as_list()
+        length = probabilities_shape[1]
         if 'dialog_switch' in special_args:
             if special_args['dialog_switch']:
-                probabilities_shape = probabilities.get_shape().as_list()
-                length = probabilities_shape[1]
                 _, switch = tf.split(labels, [length, 1], axis=1, name='switch_vector')
                 switch = tf.reshape(switch, [-1], name='switch_reshaped')
+        if 'mark_vec_len' in special_args:
+            if special_args['mark_vec_len'] is not None:
+                probabilities, _ = tf.split(
+                    probabilities,
+                    [length - special_args['mark_vec_len'], special_args['mark_vec_len']],
+                    axis=1,
+                    name='word_and_punctuation_preds')
         ln2 = np.log(2, dtype=np.float32)
         shape = probabilities.get_shape().as_list()
         probabilities = tf.where(probabilities > 1e-10,
@@ -162,12 +169,25 @@ def loss_tensor(**kwargs):
         predictions = kwargs['predictions']
         labels = kwargs['labels']
         special_args = kwargs['special_args']
+        predictions_shape = predictions.get_shape().as_list()
+        length = predictions_shape[1]
+        # print('(loss_tensor)length:', length)
         if 'dialog_switch' in special_args:
             if special_args['dialog_switch']:
-                predictions_shape = predictions.get_shape().as_list()
-                length = predictions_shape[1]
                 labels, switch = tf.split(labels, [length, 1], axis=1, name='labels_and_switch')
                 switch = tf.reshape(switch, [-1], name='switch_reshaped')
+        if 'mark_vec_len' in special_args:
+            if special_args['mark_vec_len'] is not None:
+                predictions, _ = tf.split(
+                    predictions,
+                    [length - special_args['mark_vec_len'], special_args['mark_vec_len']],
+                    axis=1,
+                    name='word_and_punctuation_preds')
+                labels, _ = tf.split(
+                    labels,
+                    [length - special_args['mark_vec_len'], special_args['mark_vec_len']],
+                    axis=1,
+                    name='word_and_punctuation_labels')
         shape = predictions.get_shape().as_list()
         predictions = tf.where(predictions > 1e-10,
                                predictions,
@@ -197,15 +217,27 @@ def accuracy_tensor(**kwargs):
         predictions = kwargs['predictions']
         labels = kwargs['labels']
         special_args = kwargs['special_args']
+        predictions_shape = predictions.get_shape().as_list()
+        length = predictions_shape[1]
         if 'dialog_switch' in special_args:
             if special_args['dialog_switch']:
-                predictions_shape = predictions.get_shape().as_list()
-                length = predictions_shape[1]
                 labels, switch = tf.split(labels,
                                           [length, 1],
                                           axis=1,
                                           name='labels_and_switch')
                 switch = tf.reshape(switch, [-1], name='switch')
+        if 'mark_vec_len' in special_args:
+            if special_args['mark_vec_len'] is not None:
+                predictions, _ = tf.split(
+                    predictions,
+                    [length - special_args['mark_vec_len'], special_args['mark_vec_len']],
+                    axis=1,
+                    name='word_and_punctuation_preds')
+                labels, _ = tf.split(
+                    labels,
+                    [length - special_args['mark_vec_len'], special_args['mark_vec_len']],
+                    axis=1,
+                    name='word_and_punctuation_labels')
         predictions = tf.argmax(predictions, axis=1, name='predictions')
         labels = tf.argmax(labels, axis=1, name='labels')
         accuracy = tf.to_float(tf.equal(predictions, labels), name='accuracy_not_aver')
@@ -309,55 +341,55 @@ class Environment(object):
 
         self._build_functions = {'identity': identity_tensor}
 
-        pupil_special_args = self._pupil_class.get_special_args()
-        train_perplexity_builder = dict(f=perplexity_tensor,
-                                        hooks={'probabilities': 'predictions',
-                                               'labels': 'labels'},
-                                        tensor_names=dict(),
-                                        output_hook_name='perplexity',
-                                        special_args=pupil_special_args)
-        valid_perplexity_builder = dict(f=perplexity_tensor,
-                                        hooks={'probabilities': 'validation_predictions',
-                                               'labels': 'validation_labels'},
-                                        tensor_names=dict(),
-                                        output_hook_name='validation_perplexity',
-                                        special_args=pupil_special_args)
-        valid_loss_builder = dict(f=loss_tensor,
-                                  hooks={'predictions': 'validation_predictions',
-                                         'labels': 'validation_labels'},
-                                  tensor_names=dict(),
-                                  output_hook_name='validation_loss',
-                                  special_args=pupil_special_args)
-        train_bpc_builder = dict(f=bpc_tensor,
-                                 hooks={'loss': 'loss'},
-                                 tensor_names=dict(),
-                                 output_hook_name='bpc',
-                                 special_args=pupil_special_args)
-        valid_bpc_builder=dict(f=bpc_tensor,
-                               hooks={'loss': 'validation_loss'},
-                               tensor_names=dict(),
-                               output_hook_name='validation_bpc',
-                               special_args=pupil_special_args)
-        train_accuracy_builder=dict(f=accuracy_tensor,
-                                    hooks={'predictions': 'predictions',
-                                          'labels': 'labels'},
-                                    tensor_names=dict(),
-                                    output_hook_name='accuracy',
-                                    special_args=pupil_special_args)
-        valid_accuracy_builder=dict(f=accuracy_tensor,
-                                    hooks={'predictions': 'validation_predictions',
-                                           'labels': 'validation_labels'},
-                                    tensor_names=dict(),
-                                    output_hook_name='validation_accuracy',
-                                    special_args=pupil_special_args)
-
-        self._builders = {'perplexity': train_perplexity_builder,
-                          'validation_perplexity': valid_perplexity_builder,
-                          'validation_loss': valid_loss_builder,
-                          'bpc': train_bpc_builder,
-                          'validation_bpc': valid_bpc_builder,
-                          'accuracy': train_accuracy_builder,
-                          'validation_accuracy': valid_accuracy_builder}
+        # pupil_special_args = self._pupil_class.get_special_args()
+        # train_perplexity_builder = dict(f=perplexity_tensor,
+        #                                 hooks={'probabilities': 'predictions',
+        #                                        'labels': 'labels'},
+        #                                 tensor_names=dict(),
+        #                                 output_hook_name='perplexity',
+        #                                 special_args=pupil_special_args)
+        # valid_perplexity_builder = dict(f=perplexity_tensor,
+        #                                 hooks={'probabilities': 'validation_predictions',
+        #                                        'labels': 'validation_labels'},
+        #                                 tensor_names=dict(),
+        #                                 output_hook_name='validation_perplexity',
+        #                                 special_args=pupil_special_args)
+        # valid_loss_builder = dict(f=loss_tensor,
+        #                           hooks={'predictions': 'validation_predictions',
+        #                                  'labels': 'validation_labels'},
+        #                           tensor_names=dict(),
+        #                           output_hook_name='validation_loss',
+        #                           special_args=pupil_special_args)
+        # train_bpc_builder = dict(f=bpc_tensor,
+        #                          hooks={'loss': 'loss'},
+        #                          tensor_names=dict(),
+        #                          output_hook_name='bpc',
+        #                          special_args=pupil_special_args)
+        # valid_bpc_builder=dict(f=bpc_tensor,
+        #                        hooks={'loss': 'validation_loss'},
+        #                        tensor_names=dict(),
+        #                        output_hook_name='validation_bpc',
+        #                        special_args=pupil_special_args)
+        # train_accuracy_builder=dict(f=accuracy_tensor,
+        #                             hooks={'predictions': 'predictions',
+        #                                   'labels': 'labels'},
+        #                             tensor_names=dict(),
+        #                             output_hook_name='accuracy',
+        #                             special_args=pupil_special_args)
+        # valid_accuracy_builder=dict(f=accuracy_tensor,
+        #                             hooks={'predictions': 'validation_predictions',
+        #                                    'labels': 'validation_labels'},
+        #                             tensor_names=dict(),
+        #                             output_hook_name='validation_accuracy',
+        #                             special_args=pupil_special_args)
+        #
+        # self._builders = {'perplexity': train_perplexity_builder,
+        #                   'validation_perplexity': valid_perplexity_builder,
+        #                   'validation_loss': valid_loss_builder,
+        #                   'bpc': train_bpc_builder,
+        #                   'validation_bpc': valid_bpc_builder,
+        #                   'accuracy': train_accuracy_builder,
+        #                   'validation_accuracy': valid_accuracy_builder}
 
         tensor_schedule = {'train_print_tensors': dict(),
                            'train_save_tensors': dict(),
@@ -494,6 +526,7 @@ class Environment(object):
         # getting default hooks
         default_hooks = self._pupil.get_default_hooks()
         self._pupil_hooks.update(default_hooks)
+        self._register_default_builders()
 
     def _split_to_loss_and_not_loss_names(self, names):
         loss_names = list()
@@ -577,6 +610,57 @@ class Environment(object):
                                                 tensor_names=tensor_names,
                                                 output_hook_name=output_hook_name,
                                                 special_args=special_args)
+
+    def _register_default_builders(self):
+        pupil_special_args = self._pupil.get_special_args()
+        train_perplexity_builder = dict(f=perplexity_tensor,
+                                        hooks={'probabilities': 'predictions',
+                                               'labels': 'labels'},
+                                        tensor_names=dict(),
+                                        output_hook_name='perplexity',
+                                        special_args=pupil_special_args)
+        valid_perplexity_builder = dict(f=perplexity_tensor,
+                                        hooks={'probabilities': 'validation_predictions',
+                                               'labels': 'validation_labels'},
+                                        tensor_names=dict(),
+                                        output_hook_name='validation_perplexity',
+                                        special_args=pupil_special_args)
+        valid_loss_builder = dict(f=loss_tensor,
+                                  hooks={'predictions': 'validation_predictions',
+                                         'labels': 'validation_labels'},
+                                  tensor_names=dict(),
+                                  output_hook_name='validation_loss',
+                                  special_args=pupil_special_args)
+        train_bpc_builder = dict(f=bpc_tensor,
+                                 hooks={'loss': 'loss'},
+                                 tensor_names=dict(),
+                                 output_hook_name='bpc',
+                                 special_args=pupil_special_args)
+        valid_bpc_builder=dict(f=bpc_tensor,
+                               hooks={'loss': 'validation_loss'},
+                               tensor_names=dict(),
+                               output_hook_name='validation_bpc',
+                               special_args=pupil_special_args)
+        train_accuracy_builder=dict(f=accuracy_tensor,
+                                    hooks={'predictions': 'predictions',
+                                          'labels': 'labels'},
+                                    tensor_names=dict(),
+                                    output_hook_name='accuracy',
+                                    special_args=pupil_special_args)
+        valid_accuracy_builder=dict(f=accuracy_tensor,
+                                    hooks={'predictions': 'validation_predictions',
+                                           'labels': 'validation_labels'},
+                                    tensor_names=dict(),
+                                    output_hook_name='validation_accuracy',
+                                    special_args=pupil_special_args)
+
+        self._builders = {'perplexity': train_perplexity_builder,
+                          'validation_perplexity': valid_perplexity_builder,
+                          'validation_loss': valid_loss_builder,
+                          'bpc': train_bpc_builder,
+                          'validation_bpc': valid_bpc_builder,
+                          'accuracy': train_accuracy_builder,
+                          'validation_accuracy': valid_accuracy_builder}
 
     @classmethod
     def _update_dict(cls, dict_to_update, update):
@@ -750,7 +834,7 @@ class Environment(object):
                     self._session.run(self._pupil_hooks['reset_validation_state'])
                 # print("fuse['text']:", [fuse['text']])
                 for char_idx, char in enumerate(fuse['text']):
-                    vec = batch_generator.char2vec(char, batch_generator.characters_positions_in_vocabulary)
+                    vec = batch_generator.char2vec(char, batch_generator.character_positions_in_vocabulary)
                     feed_dict = {self._pupil_hooks['validation_inputs']: vec}
                     feed_dict.update(additional_feed_dict)
                     fuse_operations = self._handler.get_tensors('fuse', char_idx)
@@ -902,9 +986,9 @@ class Environment(object):
                     missing.append(tensor_alias)
         self.add_hooks(missing, model_type=model_type)
 
-    def _build_batch_kwargs(self, unprepaired_kwargs):
+    def _build_batch_kwargs(self, unprepareed_kwargs):
         kwargs = dict()
-        for key, arg in unprepaired_kwargs.items():
+        for key, arg in unprepareed_kwargs.items():
             if isinstance(arg, Controller):
                 kwargs[key] = arg.get()
             else:
@@ -1251,7 +1335,8 @@ class Environment(object):
 
         self._build(kwargs_for_building)
         #print('args_for_launches:', args_for_launches)
-        all_tensor_aliases = self._all_tensor_aliases_from_train_method_arguments(args_for_launches, evaluation=evaluation)
+        all_tensor_aliases = self._all_tensor_aliases_from_train_method_arguments(
+            args_for_launches, evaluation=evaluation)
         #print('all_tensor_aliases:', all_tensor_aliases)
         self._create_missing_hooks(all_tensor_aliases)
         self._start_session(session_specs['allow_soft_placement'],
@@ -1424,11 +1509,38 @@ class Environment(object):
         self._handler.log_finish_time()
         self._handler.close()
 
+    @staticmethod
+    def _prepare_replica(replica, batch_generator_class, bpe_codes, batch_gen_args):
+        if getattr(batch_generator_class, 'make_pairs', None) is not None:
+            if bpe_codes is not None:
+                with open(bpe_codes, 'r') as codes:
+                    bpe = BPE(codes)
+                    replica = batch_generator_class.make_pairs(bpe.segment(replica), batch_gen_args)
+                    codes.close()
+            else:
+                replica = batch_generator_class.make_pairs(replica, batch_gen_args)
+        else:
+            replica = list(replica)
+        return replica
+
+    @staticmethod
+    def _build_replica(replica):
+        if isinstance(replica, str):
+            return replica
+        if isinstance(replica, list):
+            if len(replica) == 0:
+                return ''
+            else:
+                if isinstance(replica[0], str):
+                    return ''.join(replica)
+                if isinstance(replica[0], tuple):
+                    return ''.join([''.join(p) for p in replica])
+
     def inference(self,
                   restore_path,
                   log_path,
                   vocabulary,
-                  characters_positions_in_vocabulary,
+                  character_positions_in_vocabulary,
                   batch_generator_class,
                   additions_to_feed_dict=None,
                   gpu_memory=None,
@@ -1438,7 +1550,9 @@ class Environment(object):
                   visible_device_list='',
                   appending=True,
                   temperature=0.,
-                  first_speaker='human'):
+                  first_speaker='human',
+                  bpe_codes=None,
+                  batch_gen_args=None):
         if additions_to_feed_dict is None:
             feed_dict_base = dict()
         else:
@@ -1463,18 +1577,24 @@ class Environment(object):
             human_replica = input('Human: ')
         else:
             human_replica = ''
+
+        human_replica = self._prepare_replica(human_replica, batch_generator_class, bpe_codes, batch_gen_args)
+
         sample_prediction = self._pupil_hooks['validation_predictions']
         sample_input = self._pupil_hooks['validation_inputs']
-        while not human_replica == 'FINISH':
-            if human_replica != '':
-                print_and_log('Human: ' + human_replica, _print=False, fn=log_path)
+        while not self._build_replica(human_replica) == 'FINISH':
+            # print('(Environment.inference)human_replica:', human_replica)
+            # print('(Environment.inference)self._build_replica(human_replica):', self._build_replica(human_replica))
+            if len(human_replica) > 0:
+                # print('(Environment.inference)human_replica:', human_replica)
+                print_and_log('Human: ' + self._build_replica(human_replica), _print=False, fn=log_path)
                 for char in human_replica:
-                    feed = batch_generator_class.char2vec(char, characters_positions_in_vocabulary, 0, 2)
+                    feed = batch_generator_class.char2vec(char, character_positions_in_vocabulary, 0, 2)
                     # print('feed.shape:', feed.shape)
                     feed_dict = dict(feed_dict_base.items())
                     feed_dict[sample_input] = feed
                     _ = sample_prediction.eval(feed_dict=feed_dict, session=self._session)
-            feed = batch_generator_class.char2vec('\n', characters_positions_in_vocabulary, 0, 2)
+            feed = batch_generator_class.char2vec('\n', character_positions_in_vocabulary, 0, 2)
             feed_dict = dict(feed_dict_base.items())
             feed_dict[sample_input] = feed
             prediction = sample_prediction.eval(feed_dict=feed_dict, session=self._session)
@@ -1486,7 +1606,7 @@ class Environment(object):
             bot_replica = ""
             # print('ord(\'\\n\'):', ord('\n'))
             while char != '\n' and counter < 500:
-                feed = batch_generator_class.pred2vec(prediction, 1, 2)
+                feed = batch_generator_class.pred2vec(prediction, 1, 2, batch_gen_args)
                 # print('prediction after sampling:', prediction)
                 # print('feed:', feed)
                 feed_dict = dict(feed_dict_base.items())
@@ -1503,19 +1623,22 @@ class Environment(object):
                     # print('ord(char):', ord(char))
                     bot_replica += char
                 counter += 1
-            print_and_log('Bot: ' + bot_replica, fn=log_path)
-            feed = batch_generator_class.char2vec('\n', characters_positions_in_vocabulary, 1, 2)
+            print_and_log('Bot: ' + self._build_replica(bot_replica), fn=log_path)
+            feed = batch_generator_class.char2vec('\n', character_positions_in_vocabulary, 1, 2)
             feed_dict = dict(feed_dict_base.items())
             feed_dict[sample_input] = feed
             _ = sample_prediction.eval(feed_dict=feed_dict, session=self._session)
 
             human_replica = input('Human: ')
+            human_replica = self._prepare_replica(human_replica, batch_generator_class, bpe_codes, batch_gen_args)
         with open(log_path, 'a') as fd:
             fd.write('\n*********************')
         self._close_session()
 
     def _feed_replica(self, replica, batch_generator_class,
-                      characters_positions_in_vocabulary, temperature, feed_dict_base, speaker):
+                      character_positions_in_vocabulary, temperature,
+                      feed_dict_base, speaker, bpe_codes, batch_gen_args):
+        replica = self._prepare_replica(replica, batch_generator_class, bpe_codes, batch_gen_args)
         if speaker == 'bot':
             flag = 1
         else:
@@ -1523,12 +1646,12 @@ class Environment(object):
         sample_input = self._pupil_hooks['validation_inputs']
         sample_prediction = self._pupil_hooks['validation_predictions']
         for char in replica:
-            feed = batch_generator_class.char2vec(char, characters_positions_in_vocabulary, flag, 2)
+            feed = batch_generator_class.char2vec(char, character_positions_in_vocabulary, flag, 2)
             # print('feed.shape:', feed.shape)
             feed_dict = dict(feed_dict_base.items())
             feed_dict[sample_input] = feed
             _ = sample_prediction.eval(feed_dict=feed_dict, session=self._session)
-        feed = batch_generator_class.char2vec('\n', characters_positions_in_vocabulary, flag, 2)
+        feed = batch_generator_class.char2vec('\n', character_positions_in_vocabulary, flag, 2)
         feed_dict = dict(feed_dict_base.items())
         feed_dict[sample_input] = feed
         prediction = sample_prediction.eval(feed_dict=feed_dict, session=self._session)
@@ -1538,7 +1661,7 @@ class Environment(object):
         return prediction
 
     def _generate_replica(self, prediction, batch_generator_class, vocabulary,
-                          characters_positions_in_vocabulary, temperature, feed_dict_base, speaker):
+                          character_positions_in_vocabulary, temperature, feed_dict_base, speaker, batch_gen_args):
         if speaker == 'bot':
             flag = 1
         else:
@@ -1550,7 +1673,7 @@ class Environment(object):
         sample_prediction = self._pupil_hooks['validation_predictions']
         # print('ord(\'\\n\'):', ord('\n'))
         while char != '\n' and counter < 250:
-            feed = batch_generator_class.pred2vec(prediction, flag, 2)
+            feed = batch_generator_class.pred2vec(prediction, flag, 2, batch_gen_args)
             # print('prediction after sampling:', prediction)
             # print('feed:', feed)
             feed_dict = dict(feed_dict_base.items())
@@ -1567,7 +1690,7 @@ class Environment(object):
                 # print('ord(char):', ord(char))
                 bot_replica += char
             counter += 1
-        feed = batch_generator_class.char2vec('\n', characters_positions_in_vocabulary, flag, 2)
+        feed = batch_generator_class.char2vec('\n', character_positions_in_vocabulary, flag, 2)
         feed_dict = dict(feed_dict_base.items())
         feed_dict[sample_input] = feed
         _ = sample_prediction.eval(feed_dict=feed_dict, session=self._session)
@@ -1579,12 +1702,14 @@ class Environment(object):
             restore_path,
             # log_path,
             vocabulary,
-            characters_positions_in_vocabulary,
+            character_positions_in_vocabulary,
             batch_generator_class,
             additions_to_feed_dict,
             gpu_memory,
             allow_growth,
             temperature,
+            bpe_codes,
+            batch_gen_args,
             inq,
             outq):
         # print('entered _one_chat')
@@ -1604,12 +1729,14 @@ class Environment(object):
         self._pupil_hooks['reset_validation_state'].run(session=self._session)
         greeting = 'Здравствуйте, я бот.'
         # print_and_log('Bot: ' + greeting, _print=False, fn=log_path)
-        _ = inq.get(block=False)
+        print('(Environment.one_chat)inq:', inq)
+        _ = inq.get()
+        # _ = inq.get(block=False)
         outq.put(greeting)
         # print('greeting is put in queue')
-        prediction = self._feed_replica(
+        _ = self._feed_replica(
             greeting, batch_generator_class,
-            characters_positions_in_vocabulary, temperature, feed_dict_base, 'bot')
+            character_positions_in_vocabulary, temperature, feed_dict_base, 'bot', bpe_codes, batch_gen_args)
         timeshot = time.time()
         try:
             human_replica = inq.get(timeout=300)
@@ -1625,11 +1752,12 @@ class Environment(object):
                 # print_and_log('Human: ' + human_replica, _print=False, fn=log_path)
                 prediction = self._feed_replica(
                     human_replica, batch_generator_class,
-                    characters_positions_in_vocabulary, temperature, feed_dict_base, 'human'
+                    character_positions_in_vocabulary, temperature,
+                    feed_dict_base, 'human', bpe_codes, batch_gen_args
                 )
                 bot_replica, prediction = self._generate_replica(
                     prediction, batch_generator_class, vocabulary,
-                    characters_positions_in_vocabulary, temperature, feed_dict_base, 'bot')
+                    character_positions_in_vocabulary, temperature, feed_dict_base, 'bot', batch_gen_args)
                 # print_and_log('Bot: ' + bot_replica, _print=False, fn=log_path)
                 outq.put(bot_replica)
                 timeshot = time.time()
@@ -1648,12 +1776,14 @@ class Environment(object):
                  restore_path,
                  log_path,
                  vocabulary,
-                 characters_positions_in_vocabulary,
+                 character_positions_in_vocabulary,
                  batch_generator_class,
                  additions_to_feed_dict=None,
                  gpu_memory=None,
                  allow_growth=True,
-                 temperature=0.):
+                 temperature=0.,
+                 bpe_codes=None,
+                 batch_gen_args=None):
         if len(log_path) > 4 and log_path[-4:] == '.txt':
             create_path(log_path, file_name_is_in_path=True)
         else:
@@ -1686,13 +1816,17 @@ class Environment(object):
                                 file_name = add_index_to_filename_if_needed(log_path + '/chat.txt', index=0)
                             file_names[chat_id] = file_name
                             inqs[chat_id] = mp.Queue()
+                            # print('(Environment.telegram)inqs[chat_id]:', inqs[chat_id])
                             outqs[chat_id] = mp.Queue()
                             ps[chat_id] = mp.Process(target=self._one_chat,
                                                      args=(kwargs_for_building, restore_path, vocabulary,
-                                                           characters_positions_in_vocabulary,
+                                                           character_positions_in_vocabulary,
                                                            batch_generator_class, additions_to_feed_dict, gpu_memory,
-                                                           allow_growth, temperature, inqs[chat_id], outqs[chat_id]))
+                                                           allow_growth, temperature, bpe_codes, batch_gen_args,
+                                                           inqs[chat_id], outqs[chat_id]))
+                            # print('(Environment.telegram)question:', question)
                             inqs[chat_id].put(question)
+                            # print('(Environment.telegram)inqs[chat_id]:', inqs[chat_id])
                             ps[chat_id].start()
                             # print('ps:', ps)
                         else:

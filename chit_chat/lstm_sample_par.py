@@ -73,7 +73,7 @@ class LstmBatchGenerator(object):
         return char2vec(char, character_positions_in_vocabulary, speaker_idx, speaker_flag_size)
 
     @staticmethod
-    def pred2vec(pred, next_speaker_idx, speaker_flag_size):
+    def pred2vec(pred, next_speaker_idx, speaker_flag_size, batch_gen_args):
         shape = pred.shape
         batch_size = shape[0]
         voc_size = shape[1]

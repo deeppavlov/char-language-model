@@ -23,7 +23,7 @@ class LstmBatchGenerator(object):
         return np.reshape(char2vec(char, characters_positions_in_vocabulary), (1, 1, -1))
 
     @staticmethod
-    def pred2vec(pred, speaker_idx, speaker_flag_size):
+    def pred2vec(pred, speaker_idx, speaker_flag_size, batch_gen_args):
         return np.reshape(pred2vec(pred), (1, 1, -1))
 
     @staticmethod
