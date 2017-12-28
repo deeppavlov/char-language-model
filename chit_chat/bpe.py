@@ -111,6 +111,25 @@ class BpeBatchGenerator(object):
         self._last_batch = batches[-1]
         return np.stack(batches[:-1]), np.concatenate(batches[1:], 0)
 
+    def _next_batch_with_tokens(self):
+        batch = np.zeros(shape=(self._batch_size, self._vocabulary_size), dtype=np.float)
+        tokens = list()
+        for b in range(self._batch_size):
+            # print('len(self._pairs):', len(self._pairs))
+            # print('self._cursor[b]:', self._cursor[b])
+            tokens.append(self._pairs[self._cursor[b]])
+            batch[b, char2id(self._pairs[self._cursor[b]], self.character_positions_in_vocabulary)] = 1.0
+            self._cursor[b] = (self._cursor[b] + 1) % self._number_of_pairs
+        return batch, tokens
+
+    def next_with_tokens(self):
+        batches = [self._last_batch]
+        batch, tokens = self._next_batch_with_tokens()
+        batches.append(batch)
+        self._last_batch = batches[-1]
+        # print('(BpeBatchGenerator.next_with_tokens)tokens:', tokens)
+        return np.stack(batches[:-1]), np.concatenate(batches[1:], 0), tokens
+
 
 def create_vocabularies_one_hot(text, punctuation_marks):
     vocabulary = list()

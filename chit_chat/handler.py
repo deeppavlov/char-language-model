@@ -262,9 +262,14 @@ class Handler(object):
             counter = 0
             mean = 0
             for value in value_list:
-                if value >= 0.:
-                    mean += value
-                    counter += 1
+                if isinstance(value, tuple):
+                    if value[0] >= 0.:
+                        mean += value[0]
+                        counter += value[1]
+                else:
+                    if value >= 0.:
+                        mean += value
+                        counter += 1
             if counter == 0:
                 mean = 0.
             else:
@@ -394,6 +399,41 @@ class Handler(object):
         else:
             [loss, perplexity, accuracy] = tmp_output
             self._accumulate_several_data(['loss', 'perplexity', 'accuracy'], [loss, perplexity, accuracy])
+        self._accumulate_tensors(step, validation_res)
+
+    @staticmethod
+    def _comp_chr_acc_of_2_tokens(correct_token, output_token):
+        print('(Handler._comp_chr_acc_of_2_tokens)correct_token:', correct_token)
+        # print('(Handler._comp_chr_acc_of_2_tokens)output_token:', output_token)
+        length = max(len(correct_token), len(output_token))
+        corr_chrs_num = 0
+        for idx in range(min(len(correct_token), len(output_token))):
+            if correct_token[idx] == output_token[idx]:
+                corr_chrs_num += 1
+        # print('(Handler._comp_chr_acc_of_2_tokens)return:', corr_chrs_num // length)
+        return corr_chrs_num // length
+
+    def _process_validation_by_chars_results(
+            self, step, validation_res, correct_token):
+        correct_token = ''.join(correct_token)
+        # print('(Handler._process_validation_by_chars_results)entered processing')
+        tmp_output = validation_res[self._last_run_tensor_order['basic']['borders'][0]:
+            self._last_run_tensor_order['basic']['borders'][1]]
+        if self._bpc:
+            [prediction, loss, perplexity, _, bpc] = tmp_output
+            output_token = self._batch_generator_class.vec2char(prediction, self._vocabulary)[0]
+            self._accumulate_several_data(
+                ['loss', 'perplexity', 'accuracy', 'bpc'],
+                [(loss, len(correct_token)), (perplexity, len(correct_token)),
+                 (self._comp_chr_acc_of_2_tokens(correct_token, output_token), len(correct_token)),
+                 (bpc, len(correct_token))])
+        else:
+            [prediction, loss, perplexity, _] = tmp_output
+            output_token = self._batch_generator_class.vec2char(prediction, self._vocabulary)[0]
+            self._accumulate_several_data(
+                ['loss', 'perplexity', 'accuracy'],
+                [(loss, len(correct_token)), (perplexity, len(correct_token)),
+                 (self._comp_chr_acc_of_2_tokens(correct_token, output_token), len(correct_token))])
         self._accumulate_tensors(step, validation_res)
 
     def _cope_with_tensor_alias(self,
@@ -785,6 +825,7 @@ class Handler(object):
         self._print_launch_results(results, hp)
 
     def process_results(self, *args, regime=None):
+        # print('in Handler.process_results')
         if regime == 'train':
             step = args[0]
             res = args[1]
@@ -801,6 +842,11 @@ class Handler(object):
             hp = args[0]
             res = args[1]
             self._several_launches_results_processing(hp, res)
+        if regime == 'validation_by_chars':
+            step = args[0]
+            res = args[1]
+            tokens = args[2]
+            self._process_validation_by_chars_results(step, res, tokens)
 
     def log_launch(self):
         if self._save_path is None:

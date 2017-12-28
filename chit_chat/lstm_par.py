@@ -359,6 +359,8 @@ class Lstm(Model):
                             # splitting concatenated results for different characters
             with tf.device('/cpu:0'):
                 with tf.name_scope(device_name_scope('/cpu:0') + '_gradients'):
+                    # optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
+                    optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
                     grads_and_vars = average_gradients(tower_grads)
                     grads, v = zip(*grads_and_vars)
                     grads, _ = tf.clip_by_global_norm(grads, 1.)

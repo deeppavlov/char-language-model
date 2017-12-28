@@ -456,6 +456,7 @@ class Environment(object):
                              'validation_additions_to_feed_dict': list(),
                              'validation_batch_size': 1,
                              'valid_batch_kwargs': dict(),
+                             'validate_tokens_by_chars': False,
                              'no_validation': False},
                 schedule={'to_be_collected_while_training': construct(default_collected_while_training),
                           'printed_result_types':  self.put_result_types_in_correct_order(
@@ -486,6 +487,7 @@ class Environment(object):
                       debug=None,
                       validation_datasets=None,
                       validation_batch_size=1,
+                      validate_tokens_by_chars=False,
                       valid_batch_kwargs=dict(),
                       printed_result_types=self.put_result_types_in_correct_order(['loss']),
                       fuses=None,
@@ -811,11 +813,14 @@ class Environment(object):
 
         validation_datasets = work['validation_datasets']
         for validation_dataset in validation_datasets:
-            _ = self._validate(batch_generator_class,
-                               validation_dataset,
-                               work['validation_batch_size'],
-                               work['valid_batch_kwargs'],
-                               additional_feed_dict=add_feed_dict)
+            if work['validate_tokens_by_chars']:
+                _ = self._validate_by_chars(
+                    batch_generator_class, validation_dataset, work['validation_batch_size'],
+                    work['valid_batch_kwargs'], additional_feed_dict=add_feed_dict)
+            else:
+                _ = self._validate(
+                    batch_generator_class, validation_dataset, work['validation_batch_size'],
+                    work['valid_batch_kwargs'], additional_feed_dict=add_feed_dict)
         return fuse_res
 
     def _on_fuses(self,
@@ -901,6 +906,42 @@ class Environment(object):
             self._handler.process_results(training_step, valid_res, regime='validation')
             step += 1
             inputs, labels = valid_batches.next()
+
+        means = self._handler.stop_accumulation(save_to_file=save_to_file,
+                                                save_to_storage=save_to_storage,
+                                                print_results=print_results)
+        return means
+
+    def _validate_by_chars(
+            self,
+            batch_generator_class,
+            validation_dataset,
+            validation_batch_size,
+            valid_batch_kwargs,
+            training_step=None,
+            additional_feed_dict=dict(),
+            save_to_file=None,
+            save_to_storage=None,
+            print_results=None):
+        # print('valid_batch_kwargs:', valid_batch_kwargs)
+        if 'reset_validation_state' in self._pupil_hooks:
+            self._session.run(self._pupil_hooks['reset_validation_state'])
+        #print('batch_generator_class:', batch_generator_class)
+        valid_batches = batch_generator_class(validation_dataset[0], validation_batch_size, **valid_batch_kwargs)
+        length = valid_batches.get_dataset_length()
+        inputs, labels, correct_tokens = valid_batches.next_with_tokens()
+        step = 0
+        self._handler.start_accumulation(validation_dataset[1], training_step=training_step)
+        while step < length:
+            validation_operations = self._handler.get_tensors('validation', step)
+            feed_dict = {self._pupil_hooks['validation_inputs']: inputs,
+                         self._pupil_hooks['validation_labels']: labels}
+            if isinstance(additional_feed_dict, dict):
+                feed_dict.update(additional_feed_dict)
+            valid_res = self._session.run(validation_operations, feed_dict=feed_dict)
+            self._handler.process_results(training_step, valid_res, correct_tokens[0], regime='validation_by_chars')
+            step += 1
+            inputs, labels, correct_tokens = valid_batches.next_with_tokens()
 
         means = self._handler.stop_accumulation(save_to_file=save_to_file,
                                                 save_to_storage=save_to_storage,
@@ -1159,12 +1200,17 @@ class Environment(object):
                                                                                      additional_controllers,
                                                                                      validation_additional_feed_dict)
                 for validation_dataset in train_specs['validation_datasets']:
-                    _ = self._validate(batch_generator_class,
-                                       validation_dataset,
-                                       train_specs['validation_batch_size'],
-                                       train_specs['valid_batch_kwargs'],
-                                       training_step=step,
-                                       additional_feed_dict=valid_add_feed_dict)
+                    if train_specs['validate_tokens_by_chars']:
+                        print('(Environment._train)ready to validate by chars')
+                        _ = self._validate_by_chars(
+                            batch_generator_class, validation_dataset, train_specs['validation_batch_size'],
+                            train_specs['valid_batch_kwargs'], training_step=step,
+                            additional_feed_dict=valid_add_feed_dict)
+                    else:
+                        _ = self._validate(
+                            batch_generator_class, validation_dataset, train_specs['validation_batch_size'],
+                            train_specs['valid_batch_kwargs'], training_step=step,
+                            additional_feed_dict=valid_add_feed_dict)
             if it_is_time_for_example.get():
                 valid_add_feed_dict = self._form_validation_additional_feed_dict(train_feed_dict_additions,
                                                                                  additional_controllers,
