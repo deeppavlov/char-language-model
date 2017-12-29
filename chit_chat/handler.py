@@ -264,7 +264,7 @@ class Handler(object):
             for value in value_list:
                 if isinstance(value, tuple):
                     if value[0] >= 0.:
-                        mean += value[0]
+                        mean += value[0] * value[1]
                         counter += value[1]
                 else:
                     if value >= 0.:
@@ -403,15 +403,15 @@ class Handler(object):
 
     @staticmethod
     def _comp_chr_acc_of_2_tokens(correct_token, output_token):
-        print('(Handler._comp_chr_acc_of_2_tokens)correct_token:', correct_token)
-        # print('(Handler._comp_chr_acc_of_2_tokens)output_token:', output_token)
         length = max(len(correct_token), len(output_token))
         corr_chrs_num = 0
         for idx in range(min(len(correct_token), len(output_token))):
             if correct_token[idx] == output_token[idx]:
                 corr_chrs_num += 1
         # print('(Handler._comp_chr_acc_of_2_tokens)return:', corr_chrs_num // length)
-        return corr_chrs_num // length
+        # print('(Handler._comp_chr_acc_of_2_tokens)correct and output tokens, accuracy:',
+        #       (correct_token, output_token, corr_chrs_num / length))
+        return corr_chrs_num / length
 
     def _process_validation_by_chars_results(
             self, step, validation_res, correct_token):
@@ -424,15 +424,15 @@ class Handler(object):
             output_token = self._batch_generator_class.vec2char(prediction, self._vocabulary)[0]
             self._accumulate_several_data(
                 ['loss', 'perplexity', 'accuracy', 'bpc'],
-                [(loss, len(correct_token)), (perplexity, len(correct_token)),
+                [loss, perplexity,
                  (self._comp_chr_acc_of_2_tokens(correct_token, output_token), len(correct_token)),
-                 (bpc, len(correct_token))])
+                 bpc])
         else:
             [prediction, loss, perplexity, _] = tmp_output
             output_token = self._batch_generator_class.vec2char(prediction, self._vocabulary)[0]
             self._accumulate_several_data(
                 ['loss', 'perplexity', 'accuracy'],
-                [(loss, len(correct_token)), (perplexity, len(correct_token)),
+                [loss, perplexity,
                  (self._comp_chr_acc_of_2_tokens(correct_token, output_token), len(correct_token))])
         self._accumulate_tensors(step, validation_res)
 
