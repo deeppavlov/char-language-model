@@ -6,6 +6,28 @@ import re
 MAX_NUM_PUNCTUATION_MARKS = 6
 
 
+def prepare_for_bpe(text):
+    punctuation_marks = re.escape('!"\'(),-.:;?')
+    others = re.escape('%=^~№/\n')
+
+    regex = punctuation_marks + others
+
+    text = re.sub('([%s])' % regex, r' \1 ', text)
+    text = re.sub(' {2,}', ' ', text)
+    return text
+
+
+def bpe_post_processing(text):
+    chars_not_preceded_by_space = re.escape('%^!"\'),.:;?')
+    chars_not_followed_by_space = re.escape('№')
+    chars_to_highlight = re.escape('\n')
+
+    text = re.sub(' ([%s])' % chars_not_preceded_by_space, r'@@ \1', text)
+    text = re.sub('([%s]) ' % chars_not_followed_by_space, r'\1@@ ', text)
+    text = re.sub('([%s])' % chars_to_highlight, r'@@ \1@@ ', text)
+    return text
+
+
 def create_vocabulary(text):
     vocabulary = list()
     text = re.sub('@@', '', text)
@@ -42,10 +64,9 @@ class BpeBatchGenerator(object):
 
     @staticmethod
     def make_pairs(text, batch_gen_args):
-        splitted = [s for s in re.split('(@@ ?)|(\n)', text) if s is not None and '@@' not in s]
+        splitted = [s for s in re.split('@@ ?', text)]
         pairs = list()
         for s in splitted:
-            s = re.sub('@@ ?$', '', s)
             sp = re.split('( )', s)
             for sp_ in sp:
                 if len(sp_) > 0:
@@ -68,7 +89,7 @@ class BpeBatchGenerator(object):
         self._last_batch = self._start_batch()
 
     def get_dataset_length(self):
-        return len(self._text)
+        return len(self._pairs)
 
     def get_vocabulary_size(self):
         return self._vocabulary_size
@@ -235,10 +256,9 @@ class BpeBatchGeneratorOneHot(object):
     @staticmethod
     def make_pairs(text, batch_gen_args):
         punctuation_marks = batch_gen_args['punctuation_marks']
-        splitted = [s for s in re.split('(@@ ?)|(\n)', text) if s is not None and '@@' not in s]
+        splitted = [s for s in re.split('@@ ?', text)]
         all_tokens = list()
         for s in splitted:
-            s = re.sub('@@ ?$', '', s)
             sp = re.split('( )', s)
             for sp_ in sp:
                 if len(sp_) > 0:
@@ -277,7 +297,7 @@ class BpeBatchGeneratorOneHot(object):
         self._last_batch = self._start_batch()
 
     def get_dataset_length(self):
-        return len(self._text)
+        return len(self._pairs)
 
     def get_vocabulary_size(self):
         return self._vocabulary_sizes

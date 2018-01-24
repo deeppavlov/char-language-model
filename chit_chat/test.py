@@ -6,28 +6,41 @@ from environment import Environment
 from lstm_par import Lstm, LstmBatchGenerator
 from some_useful_functions import create_vocabulary, get_positions_in_vocabulary, construct
 
+# f = open('datasets/scipop_v3.0/scipop_train.txt', 'r', encoding='utf-8')
+# text = f.read()
+# text = re.sub('<[^>]*>', '', text)
+# f.close()
+
+# from bpe import BpeBatchGenerator, BpeBatchGeneratorOneHot, create_vocabulary
+# from ngrams import NgramsBatchGenerator, create_vocabulary
+# from some_useful_functions import get_positions_in_vocabulary
+# f = open('datasets/scipop_v3.0/bpe_train.txt', 'r', encoding='utf-8')
 f = open('datasets/scipop_v3.0/scipop_train.txt', 'r', encoding='utf-8')
 text = f.read()
-text = re.sub('<[^>]*>', '', text)
 f.close()
 
+text = re.sub('<[^>]*>', '', text)
+text = re.sub('\xa0', ' ', text)
 # different
 offset = 190
-valid_size = 2000
+valid_size = 10000
 valid_text = text[offset:offset + valid_size]
 # train_text = text[offset + valid_size:]
 train_text = text[offset:]
+print('(__main__)valid_text:', valid_text)
 train_size = len(train_text)
 
 # In[5]:
 
 vocabulary = create_vocabulary(text)
+# print('vocabulary:', vocabulary)
+print('len(vocabulary):', len(vocabulary))
 vocabulary_size = len(vocabulary)
 
 # """lstm"""
 # env = Environment(Lstm, LstmBatchGenerator, vocabulary=vocabulary)
 #
-# cpiv = get_positions_in_vocabulary(vocabulary)
+cpiv = get_positions_in_vocabulary(vocabulary)
 
 
 # tensor_names = [('mask', 'validation/iter_0/force_or_sample/random_modifier:0')]
@@ -177,6 +190,8 @@ vocabulary_size = len(vocabulary)
 """lstm and gru"""
 # env = Environment(Gru, BatchGenerator, vocabulary=vocabulary)
 env = Environment(Lstm, LstmBatchGenerator, vocabulary=vocabulary)
+# env = Environment(Lstm, BpeBatchGenerator, vocabulary=vocabulary)
+# env = Environment(Lstm, NgramsBatchGenerator, vocabulary=vocabulary)
 add_feed = [{'placeholder': 'dropout', 'value': 0.9}]
 valid_add_feed = [{'placeholder': 'dropout', 'value': 1.}]
 
@@ -191,34 +206,36 @@ env.build(batch_size=64,
           going_to_limit_memory=True)
 
 # env.add_hooks(tensor_names=tensor_names)
-env.train(save_path='debugging_lstm_and_gru/first',
+env.train(save_path='debugging_bpe/first',
+          restore_path='debugging_bpe/first/checkpoints/30000',
           learning_rate={'type': 'exponential_decay',
-                         'init': .002,
-                         'decay': .9,
-                         'period': 500},
+                         'init': .00,
+                         'decay': .2,
+                         'period': 30000},
           additions_to_feed_dict=add_feed,
           validation_additions_to_feed_dict=valid_add_feed,
+          # validate_tokens_by_chars=True,
           batch_size=64,
           num_unrollings=20,
           vocabulary=vocabulary,
-          checkpoint_steps=[100],
+          checkpoint_steps=10000,
           result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
           printed_result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
           # validation_tensor_schedule=valid_tensors,
           # train_tensor_schedule=train_tensors,
-          stop=5000,
+          stop=30001,
           # train_dataset_text='abx',
           # validation_datasets_texts=['abc'],
           train_dataset_text=train_text,
           validation_dataset_texts=[valid_text],
           # validation_dataset=[valid_text],
-          results_collect_interval=100,
+          results_collect_interval=2000,
           no_validation=False,
           gpu_memory=.5)
 
-connection_interval = 8
-connection_visibility = 5
-subsequence_length_in_intervals = 10
+# connection_interval = 8
+# connection_visibility = 5
+# subsequence_length_in_intervals = 10
 
 # env.build(batch_size=64,
 #           num_layers=2,
@@ -321,13 +338,24 @@ subsequence_length_in_intervals = 10
 #           connection_visibility=connection_visibility,
 #           regime='inference')
 
-# env.inference(restore_path='debugging_environment/first/checkpoints/1000',
-#               log_path='debugging_environment/first/debug_split_inference',
-#               batch_generator_class=LstmBatchGenerator,
+# env.build(batch_size=1,
+#           num_layers=2,
+#           num_nodes=[300, 300],
+#           num_output_layers=2,
+#           num_output_nodes=[124],
+#           vocabulary_size=vocabulary_size,
+#           embedding_size=128,
+#           num_unrollings=1,
+#           going_to_limit_memory=True)
+#
+# env.inference(restore_path='debugging_bpe/first/checkpoints/final',
+#               log_path='debugging_bpe/first/debug_split_inference',
+#               batch_generator_class=BpeBatchGenerator,
 #               character_positions_in_vocabulary=cpiv,
 #               vocabulary=vocabulary,
-#               additions_to_feed_dict=[{'placeholder': 'dropout', 'value': 1}],
-#               gpu_memory=.1)
+#               additions_to_feed_dict=[{'placeholder': 'dropout', 'value': 1.}],
+#               gpu_memory=.1,
+#               bpe_codes='datasets/scipop_v3.0/codes.txt')
 
 # env.generate_discriminator_dataset(10000000, 1, text, 200, 'new_line', 'debugging_environment/first/checkpoints/1000',
 #                                    'debugging_environment/first/debug_gen_dataset',

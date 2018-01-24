@@ -323,8 +323,7 @@ class Lstm(Model):
                                     punctuation_pred_concat = tf.tanh(punctuation_logits)
                                     punctuation_loss = tf.divide(
                                         tf.reduce_sum(
-                                            tf.nn.l2_loss(
-                                                tf.tanh(punctuation_labels - punctuation_logits))),
+                                            tf.nn.l2_loss(punctuation_labels - punctuation_logits)),
                                         self._batch_size,
                                         name='punctuation_loss')
                                 elif self._punctuation_encoding == 'one_hot':
@@ -429,7 +428,18 @@ class Lstm(Model):
                         word_logit, punctuation_logit = tf.split(
                             sample_logit, [self._vocabulary_size, self._mark_vec_len], axis=1)
                         word_pred = tf.nn.softmax(word_logit)
-                        punctuation_pred = tf.tanh(punctuation_logit)
+                        if self._punctuation_encoding == 'positional_notation':
+                            punctuation_pred = tf.tanh(punctuation_logit)
+
+                        elif self._punctuation_encoding == 'one_hot':
+                            separate_mark_logits = tf.split(
+                                punctuation_logit, self._max_mark_num, axis=1, name='separate_mark_logits')
+                            separate_mark_logits = tf.concat(
+                                separate_mark_logits, 0, name='separate_mark_logits_concat')
+                            separate_mark_preds = tf.nn.softmax(
+                                separate_mark_logits, name='separate_mark_preds')
+                            separate_mark_preds = tf.split(separate_mark_preds, self._max_mark_num, axis=0)
+                            punctuation_pred = tf.concat(separate_mark_preds, 1)
                         self.sample_prediction = tf.concat([word_pred, punctuation_pred], 1)
                     self._hooks['validation_predictions'] = self.sample_prediction
 
@@ -558,12 +568,15 @@ class Lstm(Model):
                 self._output_matrices.append(tf.Variable(tf.truncated_normal([input_dim, output_dim],
                                                                              stddev=stddev),
                                                          name='output_matrix_%s' % layer_idx))
-                self._output_biases.append(tf.Variable(tf.zeros([output_dim])))
+                self._output_biases.append(tf.Variable(
+                    tf.zeros([output_dim]),
+                    name='output_bias_%s' % layer_idx))
 
             saved_vars = dict()
             saved_vars['embedding_matrix'] = self._embedding_matrix
             for layer_idx, lstm_matrix in enumerate(self._lstm_matrices):
-                saved_vars['gate_matrix_%s' % layer_idx] = lstm_matrix
+                saved_vars['lstm_matrix_%s' % layer_idx] = lstm_matrix
+                saved_vars['lstm_bias_%s' % layer_idx] = self._lstm_biases[layer_idx]
             for layer_idx, (output_matrix, output_bias) in enumerate(zip(self._output_matrices, self._output_biases)):
                 saved_vars['output_matrix_%s' % layer_idx] = output_matrix
                 saved_vars['output_bias_%s' % layer_idx] = output_bias

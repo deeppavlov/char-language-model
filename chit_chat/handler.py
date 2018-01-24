@@ -1,7 +1,8 @@
 import tensorflow as tf
 import datetime as dt
 # import os
-from some_useful_functions import create_path, add_index_to_filename_if_needed, construct, nested2string
+from some_useful_functions import create_path, add_index_to_filename_if_needed, construct, nested2string, \
+    WrongMethodCallError
 
 class Handler(object):
 
@@ -29,7 +30,9 @@ class Handler(object):
                  printed_result_types=['loss'],
                  fuses=None,
                  fuse_tensor_schedule=None,
-                 fuse_file_name=None):
+                 fuse_file_name=None,
+                 example_tensor_schedule=None,
+                 example_file_name=None):
         continuous_chit_chat = ['simple_fontain']
         # print('Initializing Handler! pid = %s' % os.getpid())
         self._processing_type = processing_type
@@ -45,6 +48,8 @@ class Handler(object):
         self._print_results = print_results
 
         self._batch_generator_class = batch_generator_class
+        self._one_char_generation = None
+
         self._vocabulary = vocabulary
         if self._save_path is not None:
             create_path(self._save_path)
@@ -71,10 +76,16 @@ class Handler(object):
             self._fuse_file_name = None
             self._fuse_tensor_schedule = None
 
+            self._print_examples = True
+            self._example_file_name = None
+            self._example_tensor_schedule = None
+
             self._processed_fuse_index = None
 
             self._text_is_being_accumulated = False
             self._accumulated_text = None
+            self._accumulated_input = None
+            self._accumulated_predictions = None
 
             self._printed_result_types = None
             self._printed_controllers = None
@@ -118,13 +129,23 @@ class Handler(object):
 
             self._processed_fuse_index = None
 
+            if example_file_name is not None:
+                self._example_file_name = example_file_name
+            elif self._save_path is not None:
+                self._example_file_name = add_index_to_filename_if_needed(self._save_path + '/examples.txt')
+            self._example_tensor_schedule = example_tensor_schedule
+
             if self._print_results is None:
                 self._print_fuses = False
+                self._print_examples = False
             else:
                 self._print_fuses = self._print_results
+                self._print_examples = self._print_results
 
             self._text_is_being_accumulated = False
             self._accumulated_text = None
+            self._accumulated_input = None
+            self._accumulated_predictions = None
 
         if self._processing_type == 'several_launches':
             self._result_types = result_types
@@ -201,8 +222,10 @@ class Handler(object):
         self._example_per_print = schedule['to_be_collected_while_training']['example_per_print']
         if self._example_per_print is not None:
             self._print_fuses = True
+            self._print_examples = True
         else:
             self._print_fuses = False
+            self._print_examples = False
         self._train_tensor_schedule = schedule['train_tensor_schedule']
         self._validation_tensor_schedule = schedule['validation_tensor_schedule']
         for tensor_use, tensor_instructions in self._validation_tensor_schedule.items():
@@ -219,6 +242,11 @@ class Handler(object):
                 fuse['results'] = list()
         if self._fuse_file_name is None and self._fuses is not None and self._save_path is not None:
             self._fuse_file_name = add_index_to_filename_if_needed(self._save_path + '/fuses.txt')
+
+        self._example_tensor_schedule = schedule['example_tensors']
+
+        if self._example_file_name is None and self._save_path is not None:
+            self._example_file_name = add_index_to_filename_if_needed(self._save_path + '/examples.txt')
 
         if self._printed_result_types is not None:
             if len(self._printed_result_types) > 0:
@@ -304,14 +332,33 @@ class Handler(object):
     def set_processed_fuse_index(self, fuse_idx):
         self._processed_fuse_index = fuse_idx
 
-    def start_text_accumulation(self):
+    def start_fuse_accumulation(self):
         self._accumulated_text = ''
         self._text_is_being_accumulated = True
 
-    def stop_text_accumulation(self):
+    def stop_fuse_accumulation(self):
         # print('self._fuses:', self._fuses)
         self._fuses[self._processed_fuse_index]['results'].append(str(self._accumulated_text))
         self._accumulated_text = None
+        self._text_is_being_accumulated = False
+
+    def start_example_accumulation(self):
+        self._text_is_being_accumulated = True
+        if self._batch_generator_class.__name__ == 'BpeBatchGenerator' or \
+                        self._batch_generator_class.__name__ == 'BpeBatchGeneratorOneHot' or \
+                        self._batch_generator_class.__name__ == 'NgramsBatchGenerator':
+            self._one_char_generation = False
+        else:
+            self._one_char_generation = True
+        if self._one_char_generation:
+            self._accumulated_input = ''
+            self._accumulated_predictions = ''
+        else:
+            self._accumulated_input = list()
+            self._accumulated_predictions = list()
+
+    def stop_example_accumulation(self):
+        # print('self._fuses:', self._fuses)
         self._text_is_being_accumulated = False
 
     def _prepair_string(self, res):
@@ -340,12 +387,40 @@ class Handler(object):
         msg += (self._stars + '\n') * 2
         return msg
 
+    def _form_example_msg(self, training_step):
+        # print('inside Handler._form_example_msg')
+        # print('(Handler._form_example_msg)self._accumulated_input:', self._accumulated_input)
+        # print('(Handler._form_example_msg)self._accumulated_predictions:', self._accumulated_predictions)
+        msg = ''
+        if training_step is not None:
+            msg += 'example generation on step %s' % str(training_step) + '\n'
+        else:
+            msg += 'example generation\n'
+        msg += (self._stars + '\n')
+        if self._one_char_generation:
+            msg += 'input:\n'
+            msg += (self._accumulated_input + '\n')
+            msg += 'predictions:\n'
+            msg += (self._accumulated_predictions + '\n')
+        else:
+            for idx, (inp, pred) in enumerate(zip(self._accumulated_input, self._accumulated_predictions)):
+                msg += '%s.|%s|%s|\n' % (idx, inp, pred)
+        msg += self._stars + '\n'
+        return msg
+
     def _print_fuse_results(self, training_step):
         print(self._form_fuse_msg(training_step))
 
     def _save_fuse_results(self, training_step):
         with open(self._fuse_file_name, 'a', encoding='utf-8') as f:
             f.write(self._form_fuse_msg(training_step) + '\n'*2)
+
+    def _print_example_results(self, training_step):
+        print(self._form_example_msg(training_step))
+
+    def _save_example_results(self, training_step):
+        with open(self._example_file_name, 'a', encoding='utf-8') as f:
+            f.write(self._form_example_msg(training_step) + '\n'*2)
 
     def clean_fuse_results(self):
         for fuse in self._fuses:
@@ -357,8 +432,18 @@ class Handler(object):
         if self._save_path is not None:
             self._save_fuse_results(training_step)
         res = construct(self._fuses)
-        for fuse in self._fuses:
-            fuse['results'] = list()
+        self.clean_fuse_results()
+        return res
+
+    def dispense_example_results(self, training_step):
+        # print('(Handler.dispense_example_results)self._print_examples:', self._print_examples)
+        if self._print_examples:
+            self._print_example_results(training_step)
+        if self._save_path is not None:
+            self._save_example_results(training_step)
+        res = construct(self._fuses)
+        self._accumulated_input = None
+        self._accumulated_predictions = None
         return res
 
     @staticmethod
@@ -390,7 +475,7 @@ class Handler(object):
                                     step,
                                     validation_res):
         # print("self._last_run_tensor_order['basic']['borders']:", self._last_run_tensor_order['basic']['borders'])
-        tmp_output = validation_res[self._last_run_tensor_order['basic']['borders'][0] + 1: \
+        tmp_output = validation_res[self._last_run_tensor_order['basic']['borders'][0] + 1:
             self._last_run_tensor_order['basic']['borders'][1]]
         # print('tmp_output:', tmp_output)
         if self._bpc:
@@ -543,6 +628,14 @@ class Handler(object):
             self._last_run_tensor_order['basic']['borders'] = [start, pointer]
             if self._fuse_tensor_schedule is not None:
                 additional_tensors = self._get_additional_tensors(self._fuse_tensor_schedule, step, pointer)
+                tensors.extend(additional_tensors)
+        if regime == 'example':
+            tensors.append(self._hooks['validation_predictions'])
+            current['tensors']['validation_predictions'] = [pointer, pointer + 1]
+            pointer += 1
+            self._last_run_tensor_order['basic']['borders'] = [start, pointer]
+            if self._example_tensor_schedule is not None:
+                additional_tensors = self._get_additional_tensors(self._example_tensor_schedule, step, pointer)
                 tensors.extend(additional_tensors)
         # print(tensors)
         return tensors
@@ -802,7 +895,17 @@ class Handler(object):
         instructions['results'].update(extracted_for_printing)
         return instructions
 
-    def _process_char_generation_results(self, step, res):
+    def _form_example_tensor_print_instructions(self, step, char, example_res, last_order):
+        instructions = dict()
+        instructions['step'] = step
+        instructions['message'] = 'example tensors:\nchar = %s' % self._form_string_char(char)
+        instructions['results'] = dict()
+        extracted_for_printing = self._extract_results(last_order, 'example_print_tensors', example_res)
+        #print('extracted_for_printing:', extracted_for_printing)
+        instructions['results'].update(extracted_for_printing)
+        return instructions
+
+    def _process_fuse_generation_results(self, step, res):
         basic_borders = self._last_run_tensor_order['basic']['borders']
         [prediction] = res[basic_borders[0]:basic_borders[1]]
         char = self._batch_generator_class.vec2char(prediction, self._vocabulary)[0]
@@ -818,6 +921,30 @@ class Handler(object):
                 self._print_tensors(print_instructions,
                                     print_step_number=True,
                                     indent=1)
+
+    def _process_example_generation_results(self, step, input_str, res):
+        basic_borders = self._last_run_tensor_order['basic']['borders']
+        [prediction] = res[basic_borders[0]:basic_borders[1]]
+        char = self._batch_generator_class.vec2char(prediction, self._vocabulary)[0]
+        if self._text_is_being_accumulated:
+            if self._one_char_generation:
+                self._accumulated_input += input_str
+                self._accumulated_predictions += char
+            else:
+                self._accumulated_input.append(input_str)
+                self._accumulated_predictions.append(char)
+        else:
+            raise WrongMethodCallError('Flag self._accumulated_text should be set True when '
+                                       'Handler._process_example_generation_results is called')
+        if 'example_print_tensors' in self._last_run_tensor_order:
+            print_borders = self._last_run_tensor_order['example_print_tensors']['borders']
+            if print_borders[1] - print_borders[0] > 0:
+                print_instructions = self._form_example_tensor_print_instructions(
+                    step, char, res, self._last_run_tensor_order)
+                self._print_tensors(
+                    print_instructions,
+                    print_step_number=True,
+                    indent=1)
 
     def _several_launches_results_processing(self, hp, results):
         self._environment_instance.append_to_storage(None, launches=(results, hp))
@@ -837,7 +964,12 @@ class Handler(object):
         if regime == 'fuse':
             step = args[0]
             res = args[1]
-            self._process_char_generation_results(step, res)
+            self._process_fuse_generation_results(step, res)
+        if regime == 'example':
+            step = args[0]
+            input_str = args[1]
+            res = args[2]
+            self._process_example_generation_results(step, input_str, res)
         if regime =='several_launches':
             hp = args[0]
             res = args[1]

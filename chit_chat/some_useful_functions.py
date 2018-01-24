@@ -29,6 +29,12 @@ class InvalidArgumentError(Exception):
         self._allowed_values = allowed_values
 
 
+class WrongMethodCallError(Exception):
+    def __init__(self, msg):
+        super(WrongMethodCallError, self).__init__(msg)
+        self._msg = msg
+
+
 def create_vocabulary(text):
     all_characters = list()
     for char in text:

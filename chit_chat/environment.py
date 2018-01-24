@@ -19,7 +19,7 @@ from args_parsing import parse_1_set_of_kwargs, parse_train_method_arguments, \
     create_all_args_for_launches, configure_args_for_launches
 from handler import Handler
 from subword_nmt.apply_bpe import BPE
-
+from bpe import prepare_for_bpe, bpe_post_processing
 
 class Controller(object):
     """Controller is a class which instances are used for computing changing learning parameters. For example
@@ -401,6 +401,7 @@ class Environment(object):
                                  'valid_save_text_tensors': dict()}
 
         fuse_tensors = {'fuse_print_tensors': dict(), 'fuse_save_tensors': dict()}
+        example_tensors = {'example_print_tensors': dict(), 'example_save_tensors': dict()}
 
         # Every results_collect_interval-th step BPC, accuracy, perplexity are collected
         # Every print_per_collected-th point containing BPC, accuracy and perplexity is printed
@@ -464,6 +465,9 @@ class Environment(object):
                           'printed_controllers': ['learning_rate'],
                           'fuses': None,
                           'fuse_tensors': construct(fuse_tensors),
+                          'prediction_examples': None,
+                          'example_length': None,
+                          'example_tensors': construct(example_tensors),
                           'replicas': None,
                           'random': {'number_of_runs': 5,
                                      'length': 80},
@@ -846,9 +850,9 @@ class Environment(object):
                     # print('(_on_fuses)feed_dict:', feed_dict)
                     fuse_res = self._session.run(fuse_operations, feed_dict=feed_dict)
                     if char_idx == len(fuse['text']) - 1 and fuse['max_num_of_chars'] > 0:
-                        self._handler.start_text_accumulation()
+                        self._handler.start_fuse_accumulation()
                     self._handler.process_results(char_idx, fuse_res, regime='fuse')
-                # self._handler.start_text_accumulation()
+                # self._handler.start_fuse_accumulation()
                 if fuse['fuse_stop'] == 'limit':
                     for char_idx in range(len(fuse['text']), len(fuse['text']) + fuse['max_num_of_chars'] - 1):
                         vec = batch_generator.pred2vec(fuse_res[0])
@@ -872,9 +876,33 @@ class Environment(object):
                         # print('char:', char)
                         counter += 1
                         char_idx += 1
-                self._handler.stop_text_accumulation()
+                self._handler.stop_fuse_accumulation()
             self._handler.set_processed_fuse_index(None)
         res = self._handler.dispense_fuse_results(training_step)
+        return res
+
+    def _prediction_examples(self,
+                             batch_generator_class,
+                             validation_dataset,
+                             example_length,
+                             valid_batch_kwargs,
+                             additional_feed_dict=dict(),
+                             training_step=None):
+        example_batches = batch_generator_class(validation_dataset[0], 1, **valid_batch_kwargs)
+        self._handler.start_example_accumulation()
+        for c_idx in range(min(example_length, example_batches.get_dataset_length())):
+            inputs, _ = example_batches.next()
+            input_str = batch_generator_class.vec2char(
+                np.reshape(inputs, (1, -1)),
+                self._vocabulary)[0]
+            feed_dict = {self._pupil_hooks['validation_inputs']: inputs}
+            feed_dict.update(additional_feed_dict)
+            example_operations = self._handler.get_tensors('example', c_idx)
+            # print('(_prediction_examples)feed_dict:', feed_dict)
+            example_res = self._session.run(example_operations, feed_dict=feed_dict)
+            self._handler.process_results(c_idx, input_str, example_res, regime='example')
+        self._handler.stop_example_accumulation()
+        res = self._handler.dispense_example_results(training_step)
         return res
 
     def _validate(self,
@@ -1220,6 +1248,15 @@ class Environment(object):
                                        schedule['fuses'],
                                        training_step=step,
                                        additional_feed_dict=valid_add_feed_dict)
+                for validation_dataset in train_specs['validation_datasets']:
+                    if schedule['example_length'] is not None:
+                        _ = self._prediction_examples(
+                            batch_generator_class,
+                            validation_dataset,
+                            schedule['example_length'],
+                            train_specs['valid_batch_kwargs'],
+                            training_step=step,
+                            additional_feed_dict=valid_add_feed_dict)
             step += 1
             self.set_in_storage(step=step)
         return step
@@ -1560,8 +1597,11 @@ class Environment(object):
         if getattr(batch_generator_class, 'make_pairs', None) is not None:
             if bpe_codes is not None:
                 with open(bpe_codes, 'r') as codes:
+                    replica = prepare_for_bpe(replica)
                     bpe = BPE(codes)
-                    replica = batch_generator_class.make_pairs(bpe.segment(replica), batch_gen_args)
+                    replica = bpe.segment(replica)
+                    replica = bpe_post_processing(replica)
+                    replica = batch_generator_class.make_pairs(replica, batch_gen_args)
                     codes.close()
             else:
                 replica = batch_generator_class.make_pairs(replica, batch_gen_args)
@@ -1636,10 +1676,13 @@ class Environment(object):
                 print_and_log('Human: ' + self._build_replica(human_replica), _print=False, fn=log_path)
                 for char in human_replica:
                     feed = batch_generator_class.char2vec(char, character_positions_in_vocabulary, 0, 2)
+                    feed_char = batch_generator_class.vec2char(np.reshape(feed, (1, -1)), vocabulary)[0]
                     # print('feed.shape:', feed.shape)
                     feed_dict = dict(feed_dict_base.items())
                     feed_dict[sample_input] = feed
-                    _ = sample_prediction.eval(feed_dict=feed_dict, session=self._session)
+                    excess_pred = sample_prediction.eval(feed_dict=feed_dict, session=self._session)
+                    excess_char = batch_generator_class.vec2char(np.reshape(excess_pred, (1, -1)), vocabulary)[0]
+                    print('char:%s|||feed_char:%s|||excess_char:%s|||' % (char, feed_char, excess_char))
             feed = batch_generator_class.char2vec('\n', character_positions_in_vocabulary, 0, 2)
             feed_dict = dict(feed_dict_base.items())
             feed_dict[sample_input] = feed
@@ -1648,11 +1691,17 @@ class Environment(object):
                 prediction = apply_temperature(prediction, -1, temperature)
                 prediction = sample(prediction, -1)
             counter = 0
-            char = None
-            bot_replica = ""
+            char = batch_generator_class.vec2char(np.reshape(feed, (1, -1)), vocabulary)[0]
+            print('char:', char)
+            bot_replica = ''
+            if char != '\n':
+                bot_replica += char
             # print('ord(\'\\n\'):', ord('\n'))
             while char != '\n' and counter < 500:
+                print('char:', char)
+                # print('prediction:\n', prediction)
                 feed = batch_generator_class.pred2vec(prediction, 1, 2, batch_gen_args)
+                # print('feed:\n', feed)
                 # print('prediction after sampling:', prediction)
                 # print('feed:', feed)
                 feed_dict = dict(feed_dict_base.items())
