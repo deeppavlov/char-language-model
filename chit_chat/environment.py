@@ -1691,7 +1691,7 @@ class Environment(object):
                 prediction = apply_temperature(prediction, -1, temperature)
                 prediction = sample(prediction, -1)
             counter = 0
-            char = batch_generator_class.vec2char(np.reshape(feed, (1, -1)), vocabulary)[0]
+            char = batch_generator_class.vec2char(np.reshape(prediction, (1, -1)), vocabulary)[0]
             print('char:', char)
             bot_replica = ''
             if char != '\n':
@@ -1712,7 +1712,7 @@ class Environment(object):
                     prediction = apply_temperature(prediction, -1, temperature)
                     # print('prediction after temperature:', prediction)
                     prediction = sample(prediction, -1)
-                char = batch_generator_class.vec2char(np.reshape(feed, (1, -1)), vocabulary)[0]
+                char = batch_generator_class.vec2char(np.reshape(prediction, (1, -1)), vocabulary)[0]
                 if char != '\n':
                     # print('char != \'\\n\', counter = %s' % counter)
                     # print('ord(char):', ord(char))
