@@ -1692,13 +1692,13 @@ class Environment(object):
                 prediction = sample(prediction, -1)
             counter = 0
             char = batch_generator_class.vec2char(np.reshape(prediction, (1, -1)), vocabulary)[0]
-            print('char:', char)
+            # print('char:', char)
             bot_replica = ''
             if char != '\n':
                 bot_replica += char
             # print('ord(\'\\n\'):', ord('\n'))
             while char != '\n' and counter < 500:
-                print('char:', char)
+                # print('char:', char)
                 # print('prediction:\n', prediction)
                 feed = batch_generator_class.pred2vec(prediction, 1, 2, batch_gen_args)
                 # print('feed:\n', feed)
