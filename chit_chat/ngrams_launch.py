@@ -65,7 +65,7 @@ valid_add_feed = [{'placeholder': 'dropout', 'value': 1.}]
 
 env.build(batch_size=256,
           num_layers=2,
-          num_nodes=[2000, 2000],
+          num_nodes=[1500, 1500],
           num_output_layers=2,
           num_output_nodes=[2048],
           vocabulary_size=vocabulary_size,
