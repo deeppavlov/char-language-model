@@ -65,14 +65,14 @@ valid_add_feed = [{'placeholder': 'dropout', 'value': 1.}]
 
 env.build(batch_size=256,
           num_layers=2,
-          num_nodes=[200, 200],
+          num_nodes=[2000, 2000],
           num_output_layers=2,
           num_output_nodes=[2048],
           vocabulary_size=vocabulary_size,
           embedding_size=512,
-          num_unrollings=20,
+          num_unrollings=100,
           going_to_limit_memory=True,
-          num_gpus=1)
+          num_gpus=2)
 
 # env.add_hooks(tensor_names=tensor_names)
 env.train(save_path='lstm_ngrams/huge_adam',
@@ -84,7 +84,7 @@ env.train(save_path='lstm_ngrams/huge_adam',
           additions_to_feed_dict=add_feed,
           validation_additions_to_feed_dict=valid_add_feed,
           batch_size=256,
-          num_unrollings=20,
+          num_unrollings=100,
           vocabulary=vocabulary,
           checkpoint_steps=50000,
           result_types=['perplexity', 'loss', 'bpc', 'accuracy'],
