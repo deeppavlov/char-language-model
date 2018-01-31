@@ -373,6 +373,10 @@ class BpeBatchGeneratorOneHot(object):
         return vec2char_one_hot(vec, vocabularies)
 
     @staticmethod
+    def vec2char_fast(vec, vocabulary):
+        return vec2char_one_hot(vec, vocabulary)
+
+    @staticmethod
     def make_pairs(text, batch_gen_args):
         punctuation_marks = batch_gen_args['punctuation_marks']
         splitted = [s for s in re.split('@@ ?', text)]

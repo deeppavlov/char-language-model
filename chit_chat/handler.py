@@ -348,7 +348,8 @@ class Handler(object):
                         self._batch_generator_class.__name__ == 'BpeBatchGeneratorOneHot' or \
                         self._batch_generator_class.__name__ == 'NgramsBatchGenerator' or \
                         self._batch_generator_class.__name__ == 'BpeFastBatchGenerator' or \
-                        self._batch_generator_class.__name__ == 'BpeFastBatchGeneratorOneHot':
+                        self._batch_generator_class.__name__ == 'BpeFastBatchGeneratorOneHot' or \
+                        self._batch_generator_class.__name__ == 'NgramsFastBatchGenerator':
             self._one_char_generation = False
         else:
             self._one_char_generation = True

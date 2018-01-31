@@ -6,7 +6,9 @@ from lstm_par import Lstm
 
 NUMBER_OF_CHARS_IN_NGRAMS = 2
 
-from ngrams import create_vocabulary, NgramsBatchGenerator as BatchGenerator
+from ngrams import create_vocabulary
+from ngrams import NgramsBatchGenerator as BatchGenerator
+# from ngrams import NgramsFastBatchGenerator as BatchGenerator
 
 # with open('datasets/scipop_v3.0/bpe_train.txt', 'r', encoding='utf-8') as f:
 #     text = f.read()
@@ -64,19 +66,20 @@ add_feed = [{'placeholder': 'dropout', 'value': 0.8}]
 valid_add_feed = [{'placeholder': 'dropout', 'value': 1.}]
 
 env.build(batch_size=256,
+          embeddings_in_batch=False,
           num_layers=2,
-          num_nodes=[1500, 1500],
+          num_nodes=[1300, 1300],
           num_output_layers=2,
           num_output_nodes=[2048],
           vocabulary_size=vocabulary_size,
           embedding_size=512,
           num_unrollings=100,
           going_to_limit_memory=True,
-          num_gpus=2)
+          num_gpus=1)
 
 # env.add_hooks(tensor_names=tensor_names)
-env.train(save_path='lstm_ngrams/huge_adam',
-          # restore_path='lstm_ngrams/huge_adam/checkpoints/40000',
+env.train(save_path='lstm_ngrams/compare_ngrams_bpe_char_31.01.18',
+          # restore_path='lstm_ngrams/compare_ngrams_bpe_char_31.01.18/checkpoints/40000',
           learning_rate={'type': 'exponential_decay',
                          'init': .002,
                          'decay': .2,
@@ -97,14 +100,15 @@ env.train(save_path='lstm_ngrams/huge_adam',
           train_dataset_text=train_text,
           validation_dataset_texts=[valid_text],
           # validation_dataset=[valid_text],
-          results_collect_interval=1000,
+          results_collect_interval=5000,
           example_length=100,
           no_validation=False)
 
 # print('reached build')
 # env.build(batch_size=1,
+#           embeddings_in_batch=False,
 #           num_layers=2,
-#           num_nodes=[2000, 2000],
+#           num_nodes=[1300, 1300],
 #           num_output_layers=2,
 #           num_output_nodes=[2048],
 #           vocabulary_size=vocabulary_size,
@@ -114,8 +118,8 @@ env.train(save_path='lstm_ngrams/huge_adam',
 #           regime='inference',
 #           num_gpus=1)
 #
-# env.inference(restore_path='lstm_bpe/huge_free_sgd/checkpoints/260000',
-#               log_path='lstm_bpe/huge_free_sgd/dialogs_1',
+# env.inference(restore_path='lstm_ngrams/compare_ngrams_bpe_char_31.01.18/checkpoints/0',
+#               log_path='lstm_ngrams/compare_ngrams_bpe_char_31.01.18/dialogs_1',
 #               batch_generator_class=BatchGenerator,
 #               character_positions_in_vocabulary=cpiv,
 #               vocabulary=vocabulary,
