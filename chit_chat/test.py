@@ -210,7 +210,7 @@ env.build(batch_size=64,
 
 # env.add_hooks(tensor_names=tensor_names)
 env.train(save_path='debugging_bpe/first',
-          restore_path='debugging_bpe/first/checkpoints/30000',
+          # restore_path='debugging_bpe/first/checkpoints/30000',
           learning_rate={'type': 'exponential_decay',
                          'init': .00,
                          'decay': .2,

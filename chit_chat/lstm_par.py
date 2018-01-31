@@ -425,8 +425,8 @@ class Lstm(Model):
                             tower_grads.append(grads_and_vars)
 
                             # splitting concatenated results for different characters
-            with tf.device('/cpu:0'):
-                with tf.name_scope(device_name_scope('/cpu:0') + '_gradients'):
+            with tf.device(self._base_device):
+                with tf.name_scope(device_name_scope(self._base_device) + '_gradients'):
                     # optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
                     optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
                     grads_and_vars = average_gradients(tower_grads)
@@ -612,7 +612,11 @@ class Lstm(Model):
             self._vec_dim = self._vocabulary_size
             self._mark_vec_len = None
 
-        with tf.device('/cpu:0'):
+        if self._num_gpus == 1:
+            self._base_device = '/gpu:0'
+        else:
+            self._base_device = '/cpu:0'
+        with tf.device(self._base_device):
             self.dropout_keep_prob = tf.placeholder(tf.float32, name='dropout_keep_prob')
 
             if self._embeddings_in_batch:
@@ -701,7 +705,7 @@ class Lstm(Model):
                 self._output_biases.append(tf.Variable(
                     tf.zeros([output_dim]),
                     name='output_bias_%s' % layer_idx))
-
+        with tf.device('/cpu:0'):
             saved_vars = dict()
             saved_vars['embedding_matrix'] = self._embedding_matrix
             for layer_idx, lstm_matrix in enumerate(self._lstm_matrices):
