@@ -7,8 +7,8 @@ from lstm_par import Lstm
 NUMBER_OF_CHARS_IN_NGRAMS = 2
 
 from ngrams import create_vocabulary
-from ngrams import NgramsBatchGenerator as BatchGenerator
-# from ngrams import NgramsFastBatchGenerator as BatchGenerator
+# from ngrams import NgramsBatchGenerator as BatchGenerator
+from ngrams import NgramsFastBatchGenerator as BatchGenerator
 
 # with open('datasets/scipop_v3.0/bpe_train.txt', 'r', encoding='utf-8') as f:
 #     text = f.read()
