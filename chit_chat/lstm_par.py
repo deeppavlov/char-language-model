@@ -2,7 +2,7 @@ from __future__ import print_function
 import numpy as np
 import tensorflow as tf
 from some_useful_functions import (construct, create_vocabulary,
-                                   get_positions_in_vocabulary, char2vec, pred2vec, vec2char,
+                                   get_positions_in_vocabulary, char2vec, pred2vec, pred2vec_fast, vec2char,
                                    char2id, id2char, flatten, get_available_gpus, device_name_scope,
                                    average_gradients, get_num_gpus_and_bs_on_gpus)
 
@@ -20,8 +20,8 @@ class LstmBatchGenerator(object):
         return create_vocabulary(text)
 
     @staticmethod
-    def char2vec(char, characters_positions_in_vocabulary, speaker_idx, speaker_flag_size):
-        return np.reshape(char2vec(char, characters_positions_in_vocabulary), (1, 1, -1))
+    def char2vec(char,character_positions_in_vocabulary, speaker_idx, speaker_flag_size):
+        return np.reshape(char2vec(char,character_positions_in_vocabulary), (1, 1, -1))
 
     @staticmethod
     def pred2vec(pred, speaker_idx, speaker_flag_size, batch_gen_args):
@@ -37,7 +37,7 @@ class LstmBatchGenerator(object):
         self._batch_size = batch_size
         self.vocabulary = vocabulary
         self._vocabulary_size = len(self.vocabulary)
-        self.characters_positions_in_vocabulary = get_positions_in_vocabulary(self.vocabulary)
+        self.character_positions_in_vocabulary = get_positions_in_vocabulary(self.vocabulary)
         self._num_unrollings = num_unrollings
         segment = self._text_size // batch_size
         self._cursor = [offset * segment for offset in range(batch_size)]
@@ -52,7 +52,7 @@ class LstmBatchGenerator(object):
     def _start_batch(self):
         batch = np.zeros(shape=(self._batch_size, self._vocabulary_size), dtype=np.float)
         for b in range(self._batch_size):
-            batch[b, char2id('\n', self.characters_positions_in_vocabulary)] = 1.0
+            batch[b, char2id('\n', self.character_positions_in_vocabulary)] = 1.0
         return batch
 
     def _zero_batch(self):
@@ -62,12 +62,12 @@ class LstmBatchGenerator(object):
         """Generate a single batch from the current cursor position in the data."""
         batch = np.zeros(shape=(self._batch_size, self._vocabulary_size), dtype=np.float)
         for b in range(self._batch_size):
-            batch[b, char2id(self._text[self._cursor[b]], self.characters_positions_in_vocabulary)] = 1.0
+            batch[b, char2id(self._text[self._cursor[b]], self.character_positions_in_vocabulary)] = 1.0
             self._cursor[b] = (self._cursor[b] + 1) % self._text_size
         return batch
 
     def char2batch(self, char):
-        return np.stack(char2vec(char, self.characters_positions_in_vocabulary)), np.stack(self._zero_batch())
+        return np.stack(char2vec(char, self.character_positions_in_vocabulary)), np.stack(self._zero_batch())
 
     def pred2batch(self, pred):
         batch = np.zeros(shape=(self._batch_size, self._vocabulary_size), dtype=np.float)
@@ -83,6 +83,75 @@ class LstmBatchGenerator(object):
         for step in range(self._num_unrollings):
             batches.append(self._next_batch())
         self._last_batch = batches[-1]
+        return np.stack(batches[:-1]), np.concatenate(batches[1:], 0)
+
+
+class LstmFastBatchGenerator(object):
+
+    @staticmethod
+    def create_vocabulary(texts):
+        text = ''
+        for t in texts:
+            text += t
+        return create_vocabulary(text)
+
+    @staticmethod
+    def char2vec(char,character_positions_in_vocabulary, speaker_idx, speaker_flag_size):
+        return np.array([char2id(char,character_positions_in_vocabulary)])
+
+    @staticmethod
+    def pred2vec(pred, speaker_idx, speaker_flag_size, batch_gen_args):
+        return np.reshape(pred2vec_fast(pred), (1, -1, 1))
+
+    @staticmethod
+    def vec2char(vec, vocabulary):
+        return vec2char(vec, vocabulary)
+
+    def __init__(self, text, batch_size, num_unrollings=1, vocabulary=None):
+        self._text = text
+        self._text_size = len(text)
+        self._batch_size = batch_size
+        self.vocabulary = vocabulary
+        self._vocabulary_size = len(self.vocabulary)
+        self.character_positions_in_vocabulary = get_positions_in_vocabulary(self.vocabulary)
+        self._num_unrollings = num_unrollings
+        segment = self._text_size // batch_size
+        self._cursor = [offset * segment for offset in range(batch_size)]
+        self._last_batch = self._start_batch()
+
+    def get_dataset_length(self):
+        return len(self._text)
+
+    def get_vocabulary_size(self):
+        return self._vocabulary_size
+
+    def _start_batch(self):
+        return np.array([[char2id('\n', self.character_positions_in_vocabulary)] for _ in range(self._batch_size)])
+
+    def _zero_batch(self):
+        return -np.ones(shape=(self._batch_size), dtype=np.float)
+
+    def _next_batch(self):
+        """Generate a single batch from the current cursor position in the data."""
+        ret = np.array([[char2id(self._text[self._cursor[b]], self.character_positions_in_vocabulary)]
+                        for b in range(self._batch_size)])
+        for b in range(self._batch_size):
+            self._cursor[b] = (self._cursor[b] + 1) % self._text_size
+        return ret
+
+    def char2batch(self, char):
+        return np.stack(char2vec(char, self.character_positions_in_vocabulary)), np.stack(self._zero_batch())
+
+    def next(self):
+        """Generate the next array of batches from the data. The array consists of
+        the last batch of the previous array, followed by num_unrollings new ones.
+        """
+        batches = [self._last_batch]
+        for step in range(self._num_unrollings):
+            batches.append(self._next_batch())
+        self._last_batch = batches[-1]
+        # print('(LstmFastBatchGenerator.next)batches[:-1]:', batches[:-1])
+        # print('(LstmFastBatchGenerator.next)batches[:-1].shape:', [b.shape for b in batches[:-1]])
         return np.stack(batches[:-1]), np.concatenate(batches[1:], 0)
 
 
@@ -301,7 +370,7 @@ class Lstm(Model):
                             all_matrices.extend(self._output_matrices)
                             l2_loss = self._l2_loss(all_matrices)
 
-                            if self._number_of_punctuation_marks is None:
+                            if self._number_of_punctuation_marks == 0:
                                 loss = tf.reduce_mean(
                                     tf.nn.softmax_cross_entropy_with_logits(labels=device_labels, logits=logits))
                                 concat_pred = tf.nn.softmax(logits)
@@ -385,12 +454,39 @@ class Lstm(Model):
     def _validation_graph(self):
         with tf.device(self._gpu_names[0]):
             with tf.name_scope('validation'):
-                self.sample_input = tf.placeholder(tf.float32,
-                                                   shape=[1, 1, self._vec_dim],
-                                                   name='sample_input')
-                self._hooks['validation_inputs'] = self.sample_input
+                if self._embeddings_in_batch:
+                    self.sample_input = tf.placeholder(tf.float32,
+                                                       shape=[1, 1, self._vec_dim],
+                                                       name='sample_input')
+                    self.validation_labels = tf.placeholder(tf.float32)
+                    validation_labels_prepaired = self.validation_labels
+                    sample_input = self.sample_input
+                else:
+                    self.validation_labels = tf.placeholder(tf.int32, [1, self._max_mark_num + 1])
+                    self.sample_input = tf.placeholder(tf.int32,
+                                                       shape=[1, 1, self._max_mark_num + 1],
+                                                       name='sample_input')
+                    if self._max_mark_num > 0:
+                        if self._punctuation_encoding == 'one_hot':
+                            inputs = tf.unstack(self.sample_input, axis=2)
+                            inp0 = tf.one_hot(inputs[0], self._vocabulary_size)
+                            inps = [tf.one_hot(inp, self._number_of_punctuation_marks) for inp in inputs[1:]]
+                            sample_input = tf.concat([inp0] + inps, 2)
+                            labels = tf.unstack(self.validation_labels, axis=1)
+                            lbl0 = tf.one_hot(labels[0], self._vocabulary_size)
+                            lbls = [tf.one_hot(lbl, self._number_of_punctuation_marks) for lbl in labels[1:]]
+                            validation_labels_prepaired = tf.concat([lbl0] + lbls, 1)
+                    else:
+                        inputs = tf.reshape(self.sample_input, [1, -1])
+                        sample_input = tf.one_hot(inputs, self._vocabulary_size)
+                        labels = tf.reshape(self.validation_labels, [1])
+                        validation_labels_prepaired = tf.one_hot(labels, self._vocabulary_size)
 
-                sample_input = tf.reshape(self.sample_input, [1, -1])
+                sample_input = tf.reshape(sample_input, [1, -1])
+
+                self._hooks['validation_inputs'] = self.sample_input
+                self._hooks['validation_labels'] = self.validation_labels
+                self._hooks['validation_labels_prepaired'] = validation_labels_prepaired
                 saved_sample_state = list()
                 for layer_idx, layer_num_nodes in enumerate(self._num_nodes):
                     saved_sample_state.append(
@@ -422,7 +518,7 @@ class Lstm(Model):
                 sample_save_ops = self._compose_save_list((saved_sample_state, sample_state))
 
                 with tf.control_dependencies(sample_save_ops):
-                    if self._number_of_punctuation_marks is None:
+                    if self._number_of_punctuation_marks == 0:
                         self.sample_prediction = tf.nn.softmax(sample_logit)
                     else:
                         word_logit, punctuation_logit = tf.split(
@@ -445,6 +541,7 @@ class Lstm(Model):
 
     def __init__(self,
                  batch_size=64,
+                 embeddings_in_batch=True,
                  num_layers=2,
                  num_nodes=[112, 113],
                  num_output_layers=1,
@@ -457,17 +554,20 @@ class Lstm(Model):
                  regularization_rate=.000006,
                  regime='train',
                  going_to_limit_memory=False,
-                 number_of_punctuation_marks=None,
-                 max_mark_num=None,
+                 number_of_punctuation_marks=0,
+                 max_mark_num=0,
                  punctuation_encoding='one_hot'):
 
         self._hooks = dict(inputs=None,
                            labels=None,
+                           labels_prepared=None,
                            train_op=None,
                            learning_rate=None,
                            loss=None,
                            predictions=None,
                            validation_inputs=None,
+                           validation_labels=None,
+                           validation_labels_prepaired=None,
                            validation_predictions=None,
                            reset_validation_state=None,
                            randomize_sample_state=None,
@@ -475,6 +575,7 @@ class Lstm(Model):
                            saver=None)
 
         self._batch_size = batch_size
+        self._embeddings_in_batch = embeddings_in_batch
         self._num_layers = num_layers
         self._num_nodes = num_nodes
         self._vocabulary_size = vocabulary_size
@@ -490,48 +591,77 @@ class Lstm(Model):
         else:
             self._gpu_names = ['/gpu:%s' % i for i in range(num_gpus)]
         num_available_gpus = len(self._gpu_names)
-        num_gpus, self._batch_sizes_on_gpus = get_num_gpus_and_bs_on_gpus(self._batch_size, num_gpus, num_available_gpus)
+        num_gpus, self._batch_sizes_on_gpus = get_num_gpus_and_bs_on_gpus(
+            self._batch_size, num_gpus, num_available_gpus)
         self._num_gpus = num_gpus
-        if number_of_punctuation_marks is None:
-            self._number_of_punctuation_marks = None
+        if number_of_punctuation_marks == 0:
+            self._number_of_punctuation_marks = 0
         else:
             self._number_of_punctuation_marks = number_of_punctuation_marks + 1
         self._punctuation_encoding = punctuation_encoding
         self._max_mark_num = max_mark_num
-        if self._number_of_punctuation_marks is not None:
-            if punctuation_encoding == 'positional_notation':
+        if self._number_of_punctuation_marks > 0:
+            if self._punctuation_encoding == 'positional_notation':
                 one_mark_bits = round(np.log2(self._number_of_punctuation_marks))
                 self._mark_vec_len = self._max_mark_num * one_mark_bits
-            elif punctuation_encoding == 'one_hot':
+            elif self._punctuation_encoding == 'one_hot':
                 one_mark_bits = self._number_of_punctuation_marks
                 self._mark_vec_len = self._max_mark_num * one_mark_bits
             self._vec_dim = self._vocabulary_size + self._mark_vec_len
         else:
             self._vec_dim = self._vocabulary_size
+            self._mark_vec_len = None
 
         with tf.device('/cpu:0'):
             self.dropout_keep_prob = tf.placeholder(tf.float32, name='dropout_keep_prob')
 
-            # print([self._num_unrollings, self._batch_size, self._vec_dim])
-            self.inputs = tf.placeholder(
-                tf.float32, shape=[self._num_unrollings, self._batch_size, self._vec_dim])
-            self.labels = tf.placeholder(
-                tf.float32, shape=[self._num_unrollings * self._batch_size, self._vec_dim])
+            if self._embeddings_in_batch:
+                # print([self._num_unrollings, self._batch_size, self._vec_dim])
+                self.inputs = tf.placeholder(
+                    tf.float32, shape=[self._num_unrollings, self._batch_size, self._vec_dim])
+                self.labels = tf.placeholder(
+                    tf.float32, shape=[self._num_unrollings * self._batch_size, self._vec_dim])
+                inputs = self.inputs
+                labels = self.labels
+            else:
+                self.inputs = tf.placeholder(
+                    tf.int32, shape=[self._num_unrollings, self._batch_size, self._max_mark_num + 1])
+                self.labels = tf.placeholder(
+                    tf.int32, shape=[self._num_unrollings * self._batch_size, self._max_mark_num + 1])
+                if self._max_mark_num > 0:
+                    if punctuation_encoding == 'one_hot':
+                        inputs = tf.unstack(self.inputs, self._max_mark_num + 1, axis=2)
+                        labels = tf.unstack(self.labels, self._max_mark_num + 1, axis=1)
+                        inp0 = tf.one_hot(inputs[0], self._vocabulary_size)
+                        other_inps = [tf.one_hot(inp, self._number_of_punctuation_marks) for inp in inputs[1:]]
+                        lbl0 = tf.one_hot(labels[0], self._vocabulary_size)
+                        other_lbls = [tf.one_hot(lbl, self._number_of_punctuation_marks) for lbl in labels[1:]]
+                        inputs = tf.concat([inp0] + other_inps, 2)
+                        labels = tf.concat([lbl0] + other_lbls, 1)
+                else:
+                    inputs = tf.reshape(self.inputs, [self._num_unrollings, self._batch_size])
+                    labels = tf.reshape(self.labels, [self._num_unrollings * self._batch_size])
+                    inputs = tf.one_hot(inputs, self._vocabulary_size)
+                    labels = tf.one_hot(labels, self._vocabulary_size)
+
 
 
             #in_flags
             self._hooks['dropout'] = self.dropout_keep_prob
             self._hooks['inputs'] = self.inputs
             self._hooks['labels'] = self.labels
+            self._hooks['labels_prepared'] = labels
 
+            # inputs = tf.Print(inputs, [tf.argmax(inputs, axis=2)], message='inputs:', summarize=1200)
+            # labels = tf.Print(labels, [tf.argmax(labels, axis=1)], message='labels_in_lstm:', summarize=1200)
 
-            inputs = tf.split(self.inputs, self._batch_sizes_on_gpus, 1)
+            inputs = tf.split(inputs, self._batch_sizes_on_gpus, 1)
             self._inputs_by_device = list()
             for dev_idx, device_inputs in enumerate(inputs):
                 self._inputs_by_device.append(tf.unstack(device_inputs, name='inp_on_dev_%s' % dev_idx))
 
             labels = tf.reshape(
-                self.labels,
+                labels,
                 shape=(self._num_unrollings, self._batch_size, self._vec_dim))
 
             labels = tf.split(labels, self._batch_sizes_on_gpus, 1)

@@ -4,6 +4,7 @@ from environment import Environment
 # from gru_par import Gru, BatchGenerator
 # from lstm_sample_par import Lstm, LstmBatchGenerator
 from lstm_par import Lstm, LstmBatchGenerator
+# from lstm_par import Lstm, LstmFastBatchGenerator
 from some_useful_functions import create_vocabulary, get_positions_in_vocabulary, construct
 
 # f = open('datasets/scipop_v3.0/scipop_train.txt', 'r', encoding='utf-8')
@@ -190,12 +191,14 @@ cpiv = get_positions_in_vocabulary(vocabulary)
 """lstm and gru"""
 # env = Environment(Gru, BatchGenerator, vocabulary=vocabulary)
 env = Environment(Lstm, LstmBatchGenerator, vocabulary=vocabulary)
+# env = Environment(Lstm, LstmFastBatchGenerator, vocabulary=vocabulary)
 # env = Environment(Lstm, BpeBatchGenerator, vocabulary=vocabulary)
 # env = Environment(Lstm, NgramsBatchGenerator, vocabulary=vocabulary)
 add_feed = [{'placeholder': 'dropout', 'value': 0.9}]
 valid_add_feed = [{'placeholder': 'dropout', 'value': 1.}]
 
 env.build(batch_size=64,
+          # embeddings_in_batch=False,
           num_layers=2,
           num_nodes=[300, 300],
           num_output_layers=2,

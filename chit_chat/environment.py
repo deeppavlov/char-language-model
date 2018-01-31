@@ -240,6 +240,13 @@ def accuracy_tensor(**kwargs):
                     name='word_and_punctuation_labels')
         predictions = tf.argmax(predictions, axis=1, name='predictions')
         labels = tf.argmax(labels, axis=1, name='labels')
+
+        # predictions = tf.Print(
+        #     predictions,
+        #     [predictions],
+        #     message='predictions_in_accuracy:', summarize=1200)
+        # labels = tf.Print(labels, [labels], message='labels_in_accuracy:', summarize=1200)
+
         accuracy = tf.to_float(tf.equal(predictions, labels), name='accuracy_not_aver')
         if 'dialog_switch' in special_args:
             if special_args['dialog_switch']:
@@ -340,56 +347,6 @@ class Environment(object):
         self._session = None
 
         self._build_functions = {'identity': identity_tensor}
-
-        # pupil_special_args = self._pupil_class.get_special_args()
-        # train_perplexity_builder = dict(f=perplexity_tensor,
-        #                                 hooks={'probabilities': 'predictions',
-        #                                        'labels': 'labels'},
-        #                                 tensor_names=dict(),
-        #                                 output_hook_name='perplexity',
-        #                                 special_args=pupil_special_args)
-        # valid_perplexity_builder = dict(f=perplexity_tensor,
-        #                                 hooks={'probabilities': 'validation_predictions',
-        #                                        'labels': 'validation_labels'},
-        #                                 tensor_names=dict(),
-        #                                 output_hook_name='validation_perplexity',
-        #                                 special_args=pupil_special_args)
-        # valid_loss_builder = dict(f=loss_tensor,
-        #                           hooks={'predictions': 'validation_predictions',
-        #                                  'labels': 'validation_labels'},
-        #                           tensor_names=dict(),
-        #                           output_hook_name='validation_loss',
-        #                           special_args=pupil_special_args)
-        # train_bpc_builder = dict(f=bpc_tensor,
-        #                          hooks={'loss': 'loss'},
-        #                          tensor_names=dict(),
-        #                          output_hook_name='bpc',
-        #                          special_args=pupil_special_args)
-        # valid_bpc_builder=dict(f=bpc_tensor,
-        #                        hooks={'loss': 'validation_loss'},
-        #                        tensor_names=dict(),
-        #                        output_hook_name='validation_bpc',
-        #                        special_args=pupil_special_args)
-        # train_accuracy_builder=dict(f=accuracy_tensor,
-        #                             hooks={'predictions': 'predictions',
-        #                                   'labels': 'labels'},
-        #                             tensor_names=dict(),
-        #                             output_hook_name='accuracy',
-        #                             special_args=pupil_special_args)
-        # valid_accuracy_builder=dict(f=accuracy_tensor,
-        #                             hooks={'predictions': 'validation_predictions',
-        #                                    'labels': 'validation_labels'},
-        #                             tensor_names=dict(),
-        #                             output_hook_name='validation_accuracy',
-        #                             special_args=pupil_special_args)
-        #
-        # self._builders = {'perplexity': train_perplexity_builder,
-        #                   'validation_perplexity': valid_perplexity_builder,
-        #                   'validation_loss': valid_loss_builder,
-        #                   'bpc': train_bpc_builder,
-        #                   'validation_bpc': valid_bpc_builder,
-        #                   'accuracy': train_accuracy_builder,
-        #                   'validation_accuracy': valid_accuracy_builder}
 
         tensor_schedule = {'train_print_tensors': dict(),
                            'train_save_tensors': dict(),
@@ -621,19 +578,19 @@ class Environment(object):
         pupil_special_args = self._pupil.get_special_args()
         train_perplexity_builder = dict(f=perplexity_tensor,
                                         hooks={'probabilities': 'predictions',
-                                               'labels': 'labels'},
+                                               'labels': 'labels_prepared'},
                                         tensor_names=dict(),
                                         output_hook_name='perplexity',
                                         special_args=pupil_special_args)
         valid_perplexity_builder = dict(f=perplexity_tensor,
                                         hooks={'probabilities': 'validation_predictions',
-                                               'labels': 'validation_labels'},
+                                               'labels': 'validation_labels_prepaired'},
                                         tensor_names=dict(),
                                         output_hook_name='validation_perplexity',
                                         special_args=pupil_special_args)
         valid_loss_builder = dict(f=loss_tensor,
                                   hooks={'predictions': 'validation_predictions',
-                                         'labels': 'validation_labels'},
+                                         'labels': 'validation_labels_prepaired'},
                                   tensor_names=dict(),
                                   output_hook_name='validation_loss',
                                   special_args=pupil_special_args)
@@ -649,13 +606,13 @@ class Environment(object):
                                special_args=pupil_special_args)
         train_accuracy_builder=dict(f=accuracy_tensor,
                                     hooks={'predictions': 'predictions',
-                                          'labels': 'labels'},
+                                          'labels': 'labels_prepared'},
                                     tensor_names=dict(),
                                     output_hook_name='accuracy',
                                     special_args=pupil_special_args)
         valid_accuracy_builder=dict(f=accuracy_tensor,
                                     hooks={'predictions': 'validation_predictions',
-                                           'labels': 'validation_labels'},
+                                           'labels': 'validation_labels_prepaired'},
                                     tensor_names=dict(),
                                     output_hook_name='validation_accuracy',
                                     special_args=pupil_special_args)
@@ -892,9 +849,11 @@ class Environment(object):
         self._handler.start_example_accumulation()
         for c_idx in range(min(example_length, example_batches.get_dataset_length())):
             inputs, _ = example_batches.next()
-            input_str = batch_generator_class.vec2char(
+            input_str = batch_generator_class.vec2char_fast(
                 np.reshape(inputs, (1, -1)),
                 self._vocabulary)[0]
+            # print('(Environment._prediction_examples)inputs:', inputs)
+            # print('(Environment._prediction_examples)input_str:', input_str)
             feed_dict = {self._pupil_hooks['validation_inputs']: inputs}
             feed_dict.update(additional_feed_dict)
             example_operations = self._handler.get_tensors('example', c_idx)
@@ -1676,8 +1635,8 @@ class Environment(object):
                 print_and_log('Human: ' + self._build_replica(human_replica), _print=False, fn=log_path)
                 for char in human_replica:
                     feed = batch_generator_class.char2vec(char, character_positions_in_vocabulary, 0, 2)
-                    feed_char = batch_generator_class.vec2char(np.reshape(feed, (1, -1)), vocabulary)[0]
-                    # print('feed.shape:', feed.shape)
+                    feed_char = batch_generator_class.vec2char_fast(np.reshape(feed, (1, -1)), vocabulary)[0]
+                    print('feed.shape:', feed.shape)
                     feed_dict = dict(feed_dict_base.items())
                     feed_dict[sample_input] = feed
                     excess_pred = sample_prediction.eval(feed_dict=feed_dict, session=self._session)

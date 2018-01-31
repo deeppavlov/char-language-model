@@ -346,7 +346,9 @@ class Handler(object):
         self._text_is_being_accumulated = True
         if self._batch_generator_class.__name__ == 'BpeBatchGenerator' or \
                         self._batch_generator_class.__name__ == 'BpeBatchGeneratorOneHot' or \
-                        self._batch_generator_class.__name__ == 'NgramsBatchGenerator':
+                        self._batch_generator_class.__name__ == 'NgramsBatchGenerator' or \
+                        self._batch_generator_class.__name__ == 'BpeFastBatchGenerator' or \
+                        self._batch_generator_class.__name__ == 'BpeFastBatchGeneratorOneHot':
             self._one_char_generation = False
         else:
             self._one_char_generation = True

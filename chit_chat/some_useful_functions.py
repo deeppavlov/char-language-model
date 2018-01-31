@@ -62,11 +62,15 @@ def char2id(char, character_positions_in_vocabulary):
 
 def id2char(dictid, vocabulary):
     voc_size = len(vocabulary)
-    if (dictid >= 0) and (dictid < voc_size):
-        return vocabulary[dictid]
-    else:
-        print(u"unexpected id")
-        return u'\0'
+    try:
+        if (dictid >= 0) and (dictid < voc_size):
+            return vocabulary[dictid]
+        else:
+            print(u"unexpected id")
+            return u'\0'
+    except TypeError:
+        print(dictid)
+        raise
 
 
 def filter_text(text, allowed_letters):
@@ -93,10 +97,25 @@ def pred2vec(pred):
     return vecs
 
 
+def pred2vec_fast(pred):
+    ids = np.argmax(pred, 1)
+    return ids
+
+
 def vec2char(pred, vocabulary):
     char_list = list()
     ids = np.argmax(pred, 1)
     for id in np.nditer(ids):
+        char_list.append(id2char(id, vocabulary))
+    if len(char_list) > 1:
+        return char_list[0]
+    else:
+        return char_list
+
+
+def vec2char_fast(pred, vocabulary):
+    char_list = list()
+    for id in np.nditer(pred):
         char_list.append(id2char(id, vocabulary))
     if len(char_list) > 1:
         return char_list[0]
