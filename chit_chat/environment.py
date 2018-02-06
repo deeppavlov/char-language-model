@@ -1659,7 +1659,7 @@ class Environment(object):
                 bot_replica += char
             # print('ord(\'\\n\'):', ord('\n'))
             while char != '\n' and counter < 500:
-                # print('char:', char)
+                # print('char:', repr(char))
                 # print('prediction:\n', prediction)
                 feed = batch_generator_class.pred2vec(prediction, 1, 2, batch_gen_args)
                 # print('feed:\n', feed)
