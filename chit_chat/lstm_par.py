@@ -588,7 +588,7 @@ class Lstm(Model):
 
         if not going_to_limit_memory:
             gpu_names = get_available_gpus()
-            self._gpu_names = ['/gpu:%s' % i for i in range(gpu_names)]
+            self._gpu_names = ['/gpu:%s' % i for i in range(len(gpu_names))]
         else:
             self._gpu_names = ['/gpu:%s' % i for i in range(num_gpus)]
         num_available_gpus = len(self._gpu_names)
