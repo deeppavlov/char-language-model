@@ -461,6 +461,25 @@ class BpeBatchGeneratorOneHot(object):
         # print('(BpeBatchGeneratorOneHot.next)shapes:', shapes)
         return np.stack(batches[:-1]), np.concatenate(batches[1:], 0)
 
+    def _next_batch_with_tokens(self):
+        batch = np.zeros(shape=(self._batch_size, self._vocabulary_size), dtype=np.float)
+        tokens = list()
+        for b in range(self._batch_size):
+            # print('len(self._pairs):', len(self._pairs))
+            # print('self._cursor[b]:', self._cursor[b])
+            tokens.append(self._pairs[self._cursor[b]])
+            batch[b, char2id(self._pairs[self._cursor[b]], self.character_positions_in_vocabulary)] = 1.0
+            self._cursor[b] = (self._cursor[b] + 1) % self._number_of_pairs
+        return batch, tokens
+
+    def next_with_tokens(self):
+        batches = [self._last_batch]
+        batch, tokens = self._next_batch_with_tokens()
+        batches.append(batch)
+        self._last_batch = batches[-1]
+        # print('(BpeBatchGenerator.next_with_tokens)tokens:', tokens)
+        return np.stack(batches[:-1]), np.concatenate(batches[1:], 0), tokens
+
 
 def char2vec_one_hot_fast(pairs, character_positions_in_vocabulary):
     if not isinstance(pairs[0], tuple):
@@ -634,3 +653,22 @@ class BpeFastBatchGeneratorOneHot(object):
         # shapes = [s.shape for s in batches[:-1]]
         # print('(BpeBatchGeneratorOneHot.next)shapes:', shapes)
         return np.stack(batches[:-1]), np.concatenate(batches[1:], 0)
+
+    def _next_batch_with_tokens(self):
+        tokens = list()
+        bs = list()
+        for b in range(self._batch_size):
+            # print('len(self._pairs):', len(self._pairs))
+            # print('self._cursor[b]:', self._cursor[b])
+            tokens.append(self._pairs[self._cursor[b]])
+            bs.append(self._pairs[self._cursor[b]])
+            self._cursor[b] = (self._cursor[b] + 1) % self._number_of_pairs
+        return char2vec_one_hot_fast(bs, self.character_positions_in_vocabulary), tokens
+
+    def next_with_tokens(self):
+        batches = [self._last_batch]
+        batch, tokens = self._next_batch_with_tokens()
+        batches.append(batch)
+        self._last_batch = batches[-1]
+        # print('(BpeBatchGenerator.next_with_tokens)tokens:', tokens)
+        return np.stack(batches[:-1]), np.concatenate(batches[1:], 0), tokens

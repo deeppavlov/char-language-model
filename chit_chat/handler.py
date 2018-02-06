@@ -53,6 +53,9 @@ class Handler(object):
         self._vocabulary = vocabulary
         if self._save_path is not None:
             create_path(self._save_path)
+
+        self._print_order = ['loss', 'bpc', 'perplexity', 'accuracy']
+
         if self._processing_type == 'train':
             self._train_files = dict()
             if self._save_path is not None:
@@ -102,7 +105,6 @@ class Handler(object):
             self._training_step = None
             self._accumulation_is_performed = False
             self._accumulated_tensors = dict()
-            self._print_order = ['loss', 'bpc', 'perplexity', 'accuracy']
             self._accumulated = dict(loss=None, perplexity=None, accuracy=None)
             if self._bpc:
                 self._accumulated['bpc'] = None
@@ -113,7 +115,10 @@ class Handler(object):
             self._validation_dataset_names = validation_dataset_names
             self._switch_datasets(validation_dataset_names=self._validation_dataset_names)
             self._printed_result_types = printed_result_types
-            self._accumulated_tensors = dict()
+            self._accumulated_tensors = dict(
+                valid_print_tensors=dict(),
+                valid_save_text_tensors=dict()
+            )
             self._accumulated = dict(loss=None, perplexity=None, accuracy=None)
             if self._bpc:
                 self._accumulated['bpc'] = None
@@ -310,7 +315,11 @@ class Handler(object):
                         if self._training_step is not None:
                             f.write('%s %s\n' % (self._training_step, mean))
                         else:
-                            f.write('%s\n' % (sum(value_list) / len(value_list)))
+                            try:
+                                f.write('%s\n' % mean)
+                            except TypeError:
+                                print('(Handler.stop_accumulation)value_list:', value_list)
+                                raise
             means[key] = mean
         if save_to_storage:
             self._environment_instance.append_to_storage(self._name_of_dataset_on_which_accumulating,
@@ -585,7 +594,7 @@ class Handler(object):
             if datum is not None:
                 self._accumulated[descriptor].append(datum)
 
-    def get_tensors(self, regime, step, with_assistant=False):
+    def get_tensors(self, regime, step, with_meta_optimizer=False):
         tensors = list()
         self._last_run_tensor_order = dict()
         pointer = 0
@@ -594,9 +603,9 @@ class Handler(object):
         current['tensors'] = dict()
         start = pointer
         if regime == 'train':
-            if with_assistant:
-                tensors.append(self._hooks['train_op_with_assistant'])
-                current['tensors']['train_op_with_assistant'] = [pointer, pointer+1]
+            if with_meta_optimizer:
+                tensors.append(self._hooks['train_op_with_meta_optimizer'])
+                current['tensors']['train_op_with_meta_optimizer'] = [pointer, pointer+1]
                 pointer += 1
             else:
                 tensors.append(self._hooks['train_op'])
@@ -722,6 +731,7 @@ class Handler(object):
                     print('%s: %s' % (key, res[key]))
 
     def _accumulate_tensors(self, step, tensors):
+        # print('(Handler._accumulate_tensors)self._last_run_tensor_order:', self._last_run_tensor_order)
         tensor_order = construct(self._last_run_tensor_order)
         del tensor_order['basic']
         for tensor_use, instructions_1_use in tensor_order.items():
@@ -768,7 +778,8 @@ class Handler(object):
                             key not in self._print_order:
                 print('%s:' % key, value)
         for key in self._print_order:
-            print('%s:' % key, kwargs[key])
+            if key in kwargs:
+                print('%s:' % key, kwargs[key])
         if 'tensors' in kwargs:
             self._print_tensors(kwargs['tensors'], self._train_tensor_schedule)
         for _ in range(indents[1]):

@@ -288,18 +288,18 @@ class Environment(object):
                  datasets=None,
                  filenames=None,
                  texts=None,
-                 assistant_class=None):
+                 meta_optimizer_class=None):
         """ Initializes environment class
         Args:
             pupil_class: is a class to which pupil model belongs
-            assistant_class: is a class to which assistant model belongs if it is provided
+            meta_optimizer_class: is a class to which meta_optimizer model belongs if it is provided
             data_filenames: contains paths to a files with data for model training, validation and testing
                 has to be a dictionary in which keys are names of datasets, values are strings with paths to files
             batch_generator_classes: """
 
         self._pupil_class = pupil_class
         self._pupil_type = self._pupil_class.get_name()
-        self._assistant_class = assistant_class
+        self._meta_optimizer_class = meta_optimizer_class
 
         if datasets is not None:
             self._datasets = dict()
@@ -327,17 +327,17 @@ class Environment(object):
 
         # # Just initializing attributes containing arguments for model building
         # self._pupil_building_parameters = self._pupil_class.get_building_parameters()
-        # if self._assistant_class is not None:
-        #     self._assistant_building_parameters = self._assistant_class.get_building_parameters()
+        # if self._meta_optimizer_class is not None:
+        #     self._meta_optimizer_building_parameters = self._meta_optimizer_class.get_building_parameters()
 
         # An attributes containing instance of self._model_class. While graph is not built self._model is None
         self._pupil = None
-        self._assistant = None
+        self._meta_optimizer = None
 
         # An attribute holding tensors which could be run. It has the form of dictionary which keys are user specified
         # descriptors of tensors and are tensors themselves
         self._pupil_hooks = dict()
-        self._assistant_hooks = dict()
+        self._meta_optimizer_hooks = dict()
 
         # List containing fuses. They are used for testing the model. You may feed them to the model and see how it
         # continues generating after that
@@ -351,8 +351,7 @@ class Environment(object):
         tensor_schedule = {'train_print_tensors': dict(),
                            'train_save_tensors': dict(),
                            'train_print_text_tensors': dict(),
-                           'train_save_text_tensors': dict(),
-                           'train_summary_tensors': dict()}
+                           'train_save_text_tensors': dict()}
 
         valid_tensor_schedule = {'valid_print_tensors': dict(),
                                  'valid_save_text_tensors': dict()}
@@ -401,7 +400,7 @@ class Environment(object):
                          'batch_generator_class': self._default_batch_generator,
                          'vocabulary': self._vocabulary},
             run=dict(
-                train_specs={'assistant': None,
+                train_specs={'meta_optimizer': None,
                              'learning_rate': construct(default_learning_rate_control),
                              'additions_to_feed_dict': list(),
                              'stop': {'type': 'limit_steps', 'limit': 10000, 'name': 'stop'},
@@ -435,6 +434,7 @@ class Environment(object):
         self._default_test_method_args = dict(
             session_specs={'allow_soft_placement': False,
                            'gpu_memory': None,
+                           'allow_growth': False,
                            'log_device_placement': False,
                            'visible_device_list': ""},
             start_specs={'restore_path': None,
@@ -468,7 +468,6 @@ class Environment(object):
         self._collected_result = None
         self.current_build_parameters = None
         self.current_launch_parameters = None
-
         self.mp_debug_flag = 0
 
     def build(self, **kwargs):
@@ -524,7 +523,7 @@ class Environment(object):
             if model_type == 'pupil':
                 self._pupil_hooks[builder['output_hook_name']] = new_tensor
             else:
-                self._assistant_hooks[builder['output_hook_name']] = new_tensor
+                self._meta_optimizer_hooks[builder['output_hook_name']] = new_tensor
         else:
             stars = '\n**********\n'
             msg = "Warning! Adding to hooks shapeless placeholder of type tf.float32 with alias '%s'" % builder_name
@@ -532,7 +531,7 @@ class Environment(object):
             if model_type == 'pupil':
                 self._pupil_hooks[builder_name] = tf.placeholder(tf.float32, name=builder_name)
             else:
-                self._assistant_hooks[builder_name] = tf.placeholder(tf.float32, name=builder_name)
+                self._meta_optimizer_hooks[builder_name] = tf.placeholder(tf.float32, name=builder_name)
 
     def add_hooks(self, builder_names_or_builders=[], tensor_names=[], model_type='pupil'):
         actual_names = list()
@@ -714,8 +713,8 @@ class Environment(object):
         print('\nCreating checkpoint at %s' % path)
         if model_type == 'pupil':
             self._pupil_hooks['saver'].save(self._session, path)
-        elif model_type == 'assistant':
-            self._assistant_hooks['saver'].save(self._session, path)
+        elif model_type == 'meta_optimizer':
+            self._meta_optimizer_hooks['saver'].save(self._session, path)
 
     def _initialize_pupil(self, restore_path):
         if restore_path is not None:
@@ -768,9 +767,12 @@ class Environment(object):
                                 fuse_file_name=work['fuse_file_name'])
         self._handler.log_launch()
         empty_batch_gen = batch_generator_class('', 1, vocabulary=start_specs['vocabulary'])
-        fuse_res = self._on_fuses(empty_batch_gen,
-                                  work['fuses'],
-                                  additional_feed_dict=add_feed_dict)
+        if work['fuses'] is not None:
+            fuse_res = self._on_fuses(empty_batch_gen,
+                                      work['fuses'],
+                                      additional_feed_dict=add_feed_dict)
+        else:
+            fuse_res = None
 
         validation_datasets = work['validation_datasets']
         for validation_dataset in validation_datasets:
@@ -1009,8 +1011,8 @@ class Environment(object):
             if model_type == 'pupil':
                 if tensor_alias not in self._pupil_hooks:
                     missing.append(tensor_alias)
-            if model_type == 'assistant':
-                if tensor_alias not in self._assistant_hooks:
+            if model_type == 'meta_optimizer':
+                if tensor_alias not in self._meta_optimizer_hooks:
                     missing.append(tensor_alias)
         self.add_hooks(missing, model_type=model_type)
 
@@ -1253,7 +1255,7 @@ class Environment(object):
                 summary: If True summary writing is activated
                 add_graph_to_summary: If True graph is added to summary
                 batch_generator_class: class of batch generator. It has to have certain methods for correct functioning
-                assistant: If meta learning is used for model training it is name of assistant network
+                meta_optimizer: If meta learning is used for model training it is name of meta_optimizer network
                 learning_rate: specifications for learning_rate control. If it is a float learning rate will not change
                     while learning. Otherwise it should be a dictionary. Now only exponential decay option is availbale.
                     Below dictionary entries are described
