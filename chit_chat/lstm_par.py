@@ -3,7 +3,7 @@ import numpy as np
 import tensorflow as tf
 from some_useful_functions import (construct, create_vocabulary,
                                    get_positions_in_vocabulary, char2vec, pred2vec, pred2vec_fast, vec2char,
-                                   char2id, id2char, flatten, get_available_gpus, device_name_scope,
+                                   vec2char_fast, char2id, id2char, flatten, get_available_gpus, device_name_scope,
                                    average_gradients, get_num_gpus_and_bs_on_gpus)
 
 
@@ -29,6 +29,10 @@ class LstmBatchGenerator(object):
 
     @staticmethod
     def vec2char(vec, vocabulary):
+        return vec2char(vec, vocabulary)
+
+    @staticmethod
+    def vec2char_fast(vec, vocabulary):
         return vec2char(vec, vocabulary)
 
     def __init__(self, text, batch_size, num_unrollings=1, vocabulary=None):
@@ -106,6 +110,10 @@ class LstmFastBatchGenerator(object):
     @staticmethod
     def vec2char(vec, vocabulary):
         return vec2char(vec, vocabulary)
+
+    @staticmethod
+    def vec2char_fast(vec, vocabulary):
+        return vec2char_fast(vec, vocabulary)
 
     def __init__(self, text, batch_size, num_unrollings=1, vocabulary=None):
         self._text = text
