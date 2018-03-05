@@ -421,7 +421,7 @@ class Environment(object):
                           'printed_controllers': ['learning_rate'],
                           'fuses': None,
                           'fuse_tensors': construct(fuse_tensors),
-                          'prediction_examples': None,
+                          # 'prediction_examples': None,
                           'example_length': None,
                           'example_tensors': construct(example_tensors),
                           'replicas': None,
@@ -454,6 +454,8 @@ class Environment(object):
                       fuses=None,
                       fuse_tensors=construct(fuse_tensors),
                       fuse_file_name=None,
+                      example_length=None,
+                      example_tensors=construct(example_tensors),
                       replicas=None,
                       random={'number_of_runs': 5,
                               'length': 80},
@@ -561,10 +563,14 @@ class Environment(object):
 
     def register_builder(self,
                          f=None,
-                         hooks=dict(),
-                         tensor_names=dict(),
+                         hooks=None,
+                         tensor_names=None,
                          output_hook_name=None,
                          special_args=None):
+        if hooks is None:
+            hooks = dict()
+        if tensor_names is None:
+            tensor_names = dict()
         if isinstance(f, str):
             f = self._build_functions[f]
         self._builders[output_hook_name] = dict(f=f,
@@ -583,13 +589,13 @@ class Environment(object):
                                         special_args=pupil_special_args)
         valid_perplexity_builder = dict(f=perplexity_tensor,
                                         hooks={'probabilities': 'validation_predictions',
-                                               'labels': 'validation_labels_prepaired'},
+                                               'labels': 'validation_labels_prepared'},
                                         tensor_names=dict(),
                                         output_hook_name='validation_perplexity',
                                         special_args=pupil_special_args)
         valid_loss_builder = dict(f=loss_tensor,
                                   hooks={'predictions': 'validation_predictions',
-                                         'labels': 'validation_labels_prepaired'},
+                                         'labels': 'validation_labels_prepared'},
                                   tensor_names=dict(),
                                   output_hook_name='validation_loss',
                                   special_args=pupil_special_args)
@@ -611,7 +617,7 @@ class Environment(object):
                                     special_args=pupil_special_args)
         valid_accuracy_builder=dict(f=accuracy_tensor,
                                     hooks={'predictions': 'validation_predictions',
-                                           'labels': 'validation_labels_prepaired'},
+                                           'labels': 'validation_labels_prepared'},
                                     tensor_names=dict(),
                                     output_hook_name='validation_accuracy',
                                     special_args=pupil_special_args)
@@ -784,13 +790,24 @@ class Environment(object):
                 _ = self._validate(
                     batch_generator_class, validation_dataset, work['validation_batch_size'],
                     work['valid_batch_kwargs'], additional_feed_dict=add_feed_dict)
-        return fuse_res
+        if work['example_length'] is not None:
+            example_res = list()
+            for validation_dataset in validation_datasets:
+                example_res.append(self._prediction_examples(
+                                batch_generator_class,
+                                validation_dataset,
+                                work['example_length'],
+                                work['valid_batch_kwargs'],
+                                additional_feed_dict=add_feed_dict))
+        return fuse_res, example_res
 
     def _on_fuses(self,
                   batch_generator,
                   fuses,
                   training_step=None,
-                  additional_feed_dict=dict()):
+                  additional_feed_dict=None):
+        if additional_feed_dict is None:
+            additional_feed_dict = dict()
         for fuse_idx, fuse in enumerate(fuses):
             if fuse_idx % 100 == 0:
                 print('Number of processed fuses:', fuse_idx)
@@ -845,8 +862,10 @@ class Environment(object):
                              validation_dataset,
                              example_length,
                              valid_batch_kwargs,
-                             additional_feed_dict=dict(),
+                             additional_feed_dict=None,
                              training_step=None):
+        if additional_feed_dict is None:
+            additional_feed_dict = dict()
         example_batches = batch_generator_class(validation_dataset[0], 1, **valid_batch_kwargs)
         self._handler.start_example_accumulation()
         for c_idx in range(min(example_length, example_batches.get_dataset_length())):
@@ -908,10 +927,12 @@ class Environment(object):
             validation_batch_size,
             valid_batch_kwargs,
             training_step=None,
-            additional_feed_dict=dict(),
+            additional_feed_dict=None,
             save_to_file=None,
             save_to_storage=None,
             print_results=None):
+        if additional_feed_dict is None:
+            additional_feed_dict = dict()
         # print('valid_batch_kwargs:', valid_batch_kwargs)
         if 'reset_validation_state' in self._pupil_hooks:
             self._session.run(self._pupil_hooks['reset_validation_state'])
@@ -1016,9 +1037,9 @@ class Environment(object):
                     missing.append(tensor_alias)
         self.add_hooks(missing, model_type=model_type)
 
-    def _build_batch_kwargs(self, unprepareed_kwargs):
+    def _build_batch_kwargs(self, unprepared_kwargs):
         kwargs = dict()
-        for key, arg in unprepareed_kwargs.items():
+        for key, arg in unprepared_kwargs.items():
             if isinstance(arg, Controller):
                 kwargs[key] = arg.get()
             else:
@@ -1987,14 +2008,15 @@ class Environment(object):
         fuses_fd.close()
         correct_answers_fd.close()
 
-        fuse_results = self.test(restore_path=restore_path,
-                                 print_results=False,
-                                 vocabulary=vocabulary,
-                                 additions_to_feed_dict=additions_to_feed_dict,
-                                 printed_result_types=None,
-                                 fuses=fuses,
-                                 random=None,
-                                 gpu_memory=gpu_memory)
+        fuse_results, _ = self.test(
+            restore_path=restore_path,
+            print_results=False,
+            vocabulary=vocabulary,
+            additions_to_feed_dict=additions_to_feed_dict,
+            printed_result_types=None,
+            fuses=fuses,
+            random=None,
+            gpu_memory=gpu_memory)
 
         generated_fd = open(add_index_to_filename_if_needed(save_path + '/generated.txt'), 'w')
         generated_text = ''
