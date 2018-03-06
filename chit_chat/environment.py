@@ -506,9 +506,10 @@ class Environment(object):
         for key, value in hooks.items():
             if value not in self._hooks:
                 stars = '\n**********\n'
-                msg = "Warning! Adding to hooks shapeless placeholder of type tf.float32 with alias '%s'" % value
-                print(stars + msg + stars)
                 self._hooks[value] = tf.placeholder(tf.float32)
+                msg = "Warning! Adding to hooks shapeless placeholder %s " \
+                      "of type tf.float32 with alias '%s'" % (self._hooks[value].name, value)
+                print(stars + msg + stars)
             arguments[key] = self._hooks[value]
         for key, value in tensor_names.items():
             arguments[key] = tf.get_default_graph().get_tensor_by_name(value)
@@ -777,6 +778,7 @@ class Environment(object):
             fuse_res = None
 
         validation_datasets = work['validation_datasets']
+        print("work['valid_batch_kwargs']:", work['valid_batch_kwargs'])
         for validation_dataset in validation_datasets:
             if work['validate_tokens_by_chars']:
                 _ = self._validate_by_chars(

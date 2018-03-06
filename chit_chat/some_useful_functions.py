@@ -1,6 +1,7 @@
 import numpy as np
 import inspect
 import os
+import ast
 from collections import OrderedDict
 import tensorflow as tf
 from tensorflow.python.client import device_lib
@@ -193,6 +194,8 @@ def construct(obj):
         new_obj = tuple(base)
     elif isinstance(obj, str):
         new_obj = str(obj)
+    elif isinstance(obj, type(np.ndarray([0]))):
+        new_obj = np.copy(obj)
     elif isinstance(obj, (int, float, complex, type(None))) or inspect.isclass(obj):
         new_obj = obj
     else:
@@ -676,3 +679,9 @@ def is_int(s):
         return True
     except ValueError:
         return False
+
+
+def load_vocabulary(vocabulary_path):
+    with open(vocabulary_path, 'r') as f:
+        lines = f.read().split('\n')
+    return [eval('"' + l + '"') if l != '"' else eval("'" + l + "'") for l in lines]
