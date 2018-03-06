@@ -795,6 +795,8 @@ class Environment(object):
                                 work['example_length'],
                                 work['valid_batch_kwargs'],
                                 additional_feed_dict=add_feed_dict))
+        else:
+            example_res = None
         return fuse_res, example_res
 
     def _on_fuses(self,
