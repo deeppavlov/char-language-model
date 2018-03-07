@@ -78,7 +78,7 @@ if __name__ == '__main__':
     inp, out, prob_vecs = predict(string, vocabulary=args.vocabulary,
                           dataset=args.dataset, restore=args.restore)
 
-    print('input:\n' + inp)
-    print('output:\n' + out)
+    print('@input:\n' + inp)
+    print('@output:\n' + out)
     if args.probabilities:
-        print('prob_vecs:\n', prob_vecs)
+        print('@prob_vecs:\n', prob_vecs)
