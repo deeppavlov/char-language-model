@@ -191,6 +191,7 @@ class Handler(object):
         # tensors. Such tuple contains tensor alias, and sizes of nested lists
 
     def _switch_datasets(self, train_dataset_name=None, validation_dataset_names=None):
+        # print('inside Handler.switch_datasets')
         if train_dataset_name is not None:
             self._train_dataset_name = train_dataset_name
         if validation_dataset_names is not None:
@@ -215,8 +216,11 @@ class Handler(object):
                     for key in self._result_types:
                         if not self._environment_instance.check_if_key_in_storage([dataset_name, key]):
                             init_dict[key] = list()
-                    #print('dataset_name:', dataset_name)
+                    # print('(Handler._switch_datasets)init_dict:', init_dict)
+                    # print('dataset_name:', dataset_name)
                     self._environment_instance.init_storage(dataset_name, **init_dict)
+                    # print('(Handler._switch_datasets)self._environment_instance._storage:',
+                    #       self._environment_instance._storage)
 
     def set_new_run_schedule(self, schedule, train_dataset_name, validation_dataset_names):
         self._results_collect_interval = schedule['to_be_collected_while_training']['results_collect_interval']
