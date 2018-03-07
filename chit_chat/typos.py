@@ -9,6 +9,7 @@ DATASET = 'typos/all_scipop.txt'
 
 
 def predict(string, vocabulary=VOCABULARY, dataset=DATASET, restore=RESTORE):
+    print('BEGIN' + string + 'END')
     if vocabulary is None:
         if dataset is not None:
             with open(dataset, 'r') as f:
@@ -48,13 +49,7 @@ def predict(string, vocabulary=VOCABULARY, dataset=DATASET, restore=RESTORE):
         print_results=False,
         verbose=False
     )
-    # print(len(example_res[0]['input']))
-    # print(len(example_res[0]['output']))
-    # print(len(example_res[0]['prob_vecs']))
-    example_res[0]['input'] = example_res[0]['input'][1:]
-    example_res[0]['output'] = example_res[0]['output'][1:]
-    example_res[0]['prob_vecs'] = example_res[0]['prob_vecs'][1:]
-    return example_res
+    return example_res[0]['input'][1:], example_res[0]['output'][1:], example_res[0]['prob_vecs'][1:]
 
 
 if __name__ == '__main__':
@@ -80,10 +75,10 @@ if __name__ == '__main__':
     elif args.string is not None:
         string = args.string
 
-    example_res = predict(string, vocabulary=args.vocabulary,
+    inp, out, prob_vecs = predict(string, vocabulary=args.vocabulary,
                           dataset=args.dataset, restore=args.restore)
 
-    print('input:\n' + example_res[0]['input'])
-    print('output:\n' + example_res[0]['output'])
+    print('input:\n' + inp)
+    print('output:\n' + out)
     if args.probabilities:
-        print('prob_vecs:\n', example_res[0]['prob_vecs'])
+        print('prob_vecs:\n', prob_vecs)
