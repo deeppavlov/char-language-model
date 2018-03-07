@@ -441,6 +441,7 @@ class Environment(object):
                          'print_results': True,
                          'result_types': self.put_result_types_in_correct_order(
                              ['loss', 'perplexity', 'accuracy']),
+                         'verbose': True,
                          'batch_generator_class': self._default_batch_generator,
                          'vocabulary': self._vocabulary},
             work=dict(additions_to_feed_dict=list(),
@@ -767,7 +768,8 @@ class Environment(object):
                                 validation_tensor_schedule=work['validation_tensor_schedule'],
                                 fuses=work['fuses'],
                                 fuse_tensor_schedule=work['fuse_tensors'],
-                                fuse_file_name=work['fuse_file_name'])
+                                fuse_file_name=work['fuse_file_name'],
+                                verbose=start_specs['verbose'])
         self._handler.log_launch()
         empty_batch_gen = batch_generator_class('', 1, vocabulary=start_specs['vocabulary'])
         if work['fuses'] is not None:
@@ -778,7 +780,7 @@ class Environment(object):
             fuse_res = None
 
         validation_datasets = work['validation_datasets']
-        print("work['valid_batch_kwargs']:", work['valid_batch_kwargs'])
+        # print("(Environment.test)work['valid_batch_kwargs']:", work['valid_batch_kwargs'])
         for validation_dataset in validation_datasets:
             if work['validate_tokens_by_chars']:
                 _ = self._validate_by_chars(
@@ -791,12 +793,15 @@ class Environment(object):
         if work['example_length'] is not None:
             example_res = list()
             for validation_dataset in validation_datasets:
-                example_res.append(self._prediction_examples(
-                                batch_generator_class,
-                                validation_dataset,
-                                work['example_length'],
-                                work['valid_batch_kwargs'],
-                                additional_feed_dict=add_feed_dict))
+                example_res.append(
+                    self._prediction_examples(
+                        batch_generator_class,
+                        validation_dataset,
+                        work['example_length'],
+                        work['valid_batch_kwargs'],
+                        additional_feed_dict=add_feed_dict
+                    )
+                )
         else:
             example_res = None
         return fuse_res, example_res
@@ -868,7 +873,7 @@ class Environment(object):
             additional_feed_dict = dict()
         example_batches = batch_generator_class(validation_dataset[0], 1, **valid_batch_kwargs)
         self._handler.start_example_accumulation()
-        for c_idx in range(min(example_length, example_batches.get_dataset_length())):
+        for c_idx in range(min(example_length, example_batches.get_dataset_length()) + 1):
             inputs, _ = example_batches.next()
             input_str = batch_generator_class.vec2char_fast(
                 np.reshape(inputs, (1, -1)),

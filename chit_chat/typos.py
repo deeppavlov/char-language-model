@@ -1,7 +1,5 @@
-import re
 import argparse
 from environment import Environment
-# from gru_par import Gru, BatchGenerator
 from lstm_par import Lstm, LstmBatchGenerator
 from some_useful_functions import create_vocabulary, get_positions_in_vocabulary, load_vocabulary
 
@@ -19,13 +17,10 @@ def predict(string, vocabulary=VOCABULARY, dataset=DATASET, restore=RESTORE):
     else:
         vocabulary = load_vocabulary(vocabulary)
     vocabulary_size = len(vocabulary)
-    print('vocabulary_size:', vocabulary_size)
-    print('vocabulary:\n', vocabulary)
+    # print('(typos.predict)vocabulary_size:', vocabulary_size)
+    # print('(typos.predict)vocabulary:\n', vocabulary)
 
     env = Environment(Lstm, LstmBatchGenerator, vocabulary=vocabulary)
-
-    # env = Environment(Gru, BatchGenerator)
-    # cpiv = get_positions_in_vocabulary(vocabulary)
 
     valid_add_feed = [# {'placeholder': 'sampling_prob', 'value': 1.},
                       {'placeholder': 'dropout', 'value': 1.}]
@@ -49,8 +44,16 @@ def predict(string, vocabulary=VOCABULARY, dataset=DATASET, restore=RESTORE):
         validation_dataset_texts=[string],
         printed_result_types=[],
         example_length=len(string),
-        vocabulary=vocabulary
+        vocabulary=vocabulary,
+        print_results=False,
+        verbose=False
     )
+    # print(len(example_res[0]['input']))
+    # print(len(example_res[0]['output']))
+    # print(len(example_res[0]['prob_vecs']))
+    example_res[0]['input'] = example_res[0]['input'][1:]
+    example_res[0]['output'] = example_res[0]['output'][1:]
+    example_res[0]['prob_vecs'] = example_res[0]['prob_vecs'][1:]
     return example_res
 
 
@@ -67,9 +70,8 @@ if __name__ == '__main__':
     parser.add_argument("-r", "--restore", help="path to file with checkpoint", default=RESTORE)
     parser.add_argument(
         "-d", "--dataset", help="path to dataset which will be used for vocabulary creation", default=DATASET)
-    # parser.add_argument('-h', '--help', action='help',
-    #                     help='This script sequentially prints to standard output \n\tinput string\n\tstring consisting '
-    #                          'of predicted characters\n\tlist of numpy 1d arrays with predictions of language model')
+    parser.add_argument(
+        "-p", "--probabilities", help="if specified print probabilities", action='store_true')
     args = parser.parse_args()
 
     if args.file2parse is not None:
@@ -80,6 +82,8 @@ if __name__ == '__main__':
 
     example_res = predict(string, vocabulary=args.vocabulary,
                           dataset=args.dataset, restore=args.restore)
-    print(example_res[0]['input'])
-    print(example_res[0]['output'])
-    print(example_res[0]['pred_vecs'])
+
+    print('input:\n' + example_res[0]['input'])
+    print('output:\n' + example_res[0]['output'])
+    if args.probabilities:
+        print('prob_vecs:\n', example_res[0]['prob_vecs'])
