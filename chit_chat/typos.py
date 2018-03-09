@@ -9,7 +9,7 @@ DATASET = 'typos/all_scipop.txt'
 
 
 def predict(string, vocabulary=VOCABULARY, dataset=DATASET, restore=RESTORE):
-    print('BEGIN' + string + 'END')
+    # print('BEGIN' + string + 'END')
     if vocabulary is None:
         if dataset is not None:
             with open(dataset, 'r') as f:
